@@ -4,126 +4,21 @@ import altair as alt
 from pathlib import Path
 
 # =====================================================
-# PAGE CONFIG
+# CONFIG
 # =====================================================
 
-st.set_page_config(
-    page_title="Email Performance Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# =====================================================
-# DESIGN SYSTEM
-# =====================================================
-
-st.markdown("""
-<style>
-/* Base & Typography */
-* {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-}
-
-h1 {
-    font-size: 32px !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.02em !important;
-    line-height: 1.2 !important;
-    color: #0f172a !important;
-    margin-bottom: 8px !important;
-}
-
-.date-context {
-    font-size: 14px;
-    color: #64748b;
-    margin-bottom: 32px;
-    font-weight: 500;
-}
-
-h2, h3 {
-    font-size: 18px !important;
-    font-weight: 600 !important;
-    letter-spacing: -0.01em !important;
-    color: #0f172a !important;
-    margin-top: 48px !important;
-    margin-bottom: 16px !important;
-}
-
-/* Metric Cards - Premium Feel */
-[data-testid="stMetricValue"] {
-    font-size: 28px !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-    letter-spacing: -0.01em !important;
-}
-
-[data-testid="stMetricLabel"] {
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    color: #64748b !important;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
-
-[data-testid="metric-container"] {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 20px 20px 16px 20px;
-    transition: all 150ms ease;
-}
-
-[data-testid="metric-container"]:hover {
-    background: #ffffff;
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-    transform: translateY(-1px);
-}
-
-/* Section Dividers */
-hr {
-    border: none;
-    border-top: 1px solid rgba(15, 23, 42, 0.1);
-    margin: 64px 0 40px 0;
-}
-
-/* Chart Containers */
-[data-testid="stVegaLiteChart"] {
-    border-radius: 12px;
-    padding: 16px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-}
-
-/* Sidebar */
-section[data-testid="stSidebar"] {
-    background: #f8fafc;
-    border-right: 1px solid #e2e8f0;
-}
-
-section[data-testid="stSidebar"] label {
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    color: #0f172a !important;
-}
-
-/* Remove Streamlit branding elements */
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
 
-ITEMS_FILE = "ItemsPT.csv"
-PRES_FILE  = "PresencePT.csv"
-ART_FILE   = "ART PT.csv"
+RESP_FILE = "Responded PT.csv"
+PRES_FILE = "PresencePT.csv"
 
-EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# SAFE CSV LOADER
+# SAFE CSV
 # =====================================================
 
 def read_csv_safe(path):
@@ -138,7 +33,6 @@ def read_csv_safe(path):
 # =====================================================
 
 def fmt_mmss(sec):
-    """Format seconds as MM:SS for AHT"""
     if pd.isna(sec):
         return "—"
     m, s = divmod(int(sec), 60)
@@ -146,495 +40,122 @@ def fmt_mmss(sec):
 
 
 def fmt_hm(sec):
-    """Format seconds as Hh MMm for response time"""
     if pd.isna(sec):
         return "—"
     sec = int(sec)
-    hours = sec // 3600
-    minutes = (sec % 3600) // 60
-    return f"{hours}h {minutes:02}m"
+    h = sec // 3600
+    m = (sec % 3600) // 60
+    return f"{h}h {m:02}m"
 
 
 # =====================================================
-# TIME HELPERS
+# LOAD
 # =====================================================
 
-def clip(s, e, ws, we):
-    """Clip interval to window"""
-    if pd.isna(s) or pd.isna(e):
-        return None
-    s2, e2 = max(s, ws), min(e, we)
-    return (s2, e2) if e2 > s2 else None
+resp = read_csv_safe(BASE / RESP_FILE)
+pres = read_csv_safe(BASE / PRES_FILE)
 
-
-def sum_seconds(intervals):
-    """Sum seconds from list of (start, end) tuples"""
-    if not intervals:
-        return 0
-    return sum((e - s).total_seconds() for s, e in intervals)
+resp.columns = resp.columns.str.strip()
+pres.columns = pres.columns.str.strip()
 
 
 # =====================================================
-# LOAD DATA
+# EXPECTED COLUMNS IN Responded PT
+# (adjust names if slightly different)
 # =====================================================
 
-@st.cache_data
-def load_all_data():
-    items = read_csv_safe(BASE / ITEMS_FILE)
-    pres  = read_csv_safe(BASE / PRES_FILE)
-    art   = read_csv_safe(BASE / ART_FILE)
-    
-    for df in (items, pres, art):
-        df.columns = df.columns.str.strip()
-    
-    return items, pres, art
+# timestamps
+resp["ReceivedDT"] = pd.to_datetime(resp["Date/Time Received"], errors="coerce", dayfirst=True)
+resp["RespondedDT"] = pd.to_datetime(resp["Date/Time Responded"], errors="coerce", dayfirst=True)
 
+# handle time already provided
+resp["HandleSec"] = pd.to_numeric(resp["Handle Time"], errors="coerce")
 
-items, pres, art = load_all_data()
+resp["ResponseSec"] = (resp["RespondedDT"] - resp["ReceivedDT"]).dt.total_seconds()
+
+resp["Date"] = resp["RespondedDT"].dt.date
 
 
 # =====================================================
-# PREPARE ITEMS (AHT)
-# =====================================================
-
-items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
-items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
-
-assign_dt = pd.to_datetime(
-    items["Assign Date"] + " " + items["Assign Time"],
-    errors="coerce",
-    dayfirst=True
-)
-items["Date"] = assign_dt.dt.date
-
-
-# =====================================================
-# PREPARE ART (RESPONSE TIME)
-# =====================================================
-
-art["OpenedDT"] = pd.to_datetime(art["Date/Time Opened"], errors="coerce", dayfirst=True)
-art["ClosedDT"] = pd.to_datetime(art["Date/Time Closed"], errors="coerce", dayfirst=True)
-art["ResponseSec"] = (art["ClosedDT"] - art["OpenedDT"]).dt.total_seconds()
-art["Date"] = art["OpenedDT"].dt.date
-
-
-# =====================================================
-# PREPARE PRESENCE
+# PRESENCE
 # =====================================================
 
 pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
 pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
 
+pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
+
 
 # =====================================================
-# SIDEBAR FILTERS
+# DATE RANGE
 # =====================================================
 
-st.sidebar.header("Filters")
+min_d = resp["Date"].min()
+max_d = resp["Date"].max()
 
-# Date range
-all_dates = pd.concat([items["Date"].dropna(), art["Date"].dropna()])
-
-if all_dates.empty:
-    st.error("No valid timestamps in dataset.")
-    st.stop()
-
-min_d = all_dates.min()
-max_d = all_dates.max()
-
-start, end = st.sidebar.date_input(
+start, end = st.date_input(
     "Date Range",
-    value=(max_d - pd.Timedelta(days=6), max_d),
-    min_value=min_d,
-    max_value=max_d
+    value=(max_d - pd.Timedelta(days=6), max_d)
 )
 
-# Filter datasets by date first
-items_filtered = items[(items["Date"] >= start) & (items["Date"] <= end)].copy()
-art_filtered   = art[(art["Date"] >= start) & (art["Date"] <= end)].copy()
-
-# =====================================================
-# DETECT REOPENED EMAILS
-# =====================================================
-
-# Look for case/email ID columns
-case_id_candidates = [col for col in items.columns if any(
-    keyword in col.lower() 
-    for keyword in ['case', 'email', 'ticket', 'id', 'number', 'reference']
-)]
-
-st.sidebar.markdown("---")
-st.sidebar.header("Reopened Email Detection")
-
-# If we found potential ID columns, let user select
-if case_id_candidates:
-    case_id_column = st.sidebar.selectbox(
-        "Case/Email ID Column",
-        options=["None (disabled)"] + case_id_candidates,
-        help="Select the column that uniquely identifies each email/case"
-    )
-    
-    if case_id_column != "None (disabled)":
-        # Calculate reopen statistics on filtered data
-        case_counts = items_filtered.groupby(case_id_column).size()
-        reopened_cases = case_counts[case_counts > 1]
-        
-        items_filtered['IsReopened'] = items_filtered[case_id_column].isin(reopened_cases.index)
-        items_filtered['TouchCount'] = items_filtered[case_id_column].map(case_counts)
-        
-        # Show reopen stats in sidebar
-        st.sidebar.metric("Total Cases", items_filtered[case_id_column].nunique())
-        st.sidebar.metric("Reopened Cases", len(reopened_cases))
-        st.sidebar.metric("Reopen Rate", f"{(len(reopened_cases) / items_filtered[case_id_column].nunique() * 100):.1f}%")
-        
-        # Toggle to exclude reopens from metrics
-        exclude_reopens = st.sidebar.checkbox(
-            "Exclude reopens from AHT",
-            value=False,
-            help="Calculate AHT only from first-touch emails"
-        )
-        
-        if exclude_reopens:
-            st.sidebar.info(f"Excluding {items_filtered['IsReopened'].sum()} reopened handles from AHT calculation")
-    else:
-        exclude_reopens = False
-        items_filtered['IsReopened'] = False
-else:
-    st.sidebar.info("No case ID column detected. Cannot identify reopened emails.")
-    exclude_reopens = False
-    items_filtered['IsReopened'] = False
+resp = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
 
 start_ts = pd.Timestamp(start)
 end_ts   = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
 # =====================================================
-# CALCULATE CAPACITY
+# CAPACITY
 # =====================================================
 
-pres_filtered = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
+def clip(s,e,ws,we):
+    s2,e2=max(s,ws),min(e,we)
+    return (s2,e2) if e2>s2 else None
+
+def sum_seconds(iv):
+    return sum((e-s).total_seconds() for s,e in iv if iv)
 
 intervals = [
-    x for x in (
-        clip(s, e, start_ts, end_ts)
-        for s, e in zip(pres_filtered["Start DT"], pres_filtered["End DT"])
-    ) if x
+    clip(s,e,start_ts,end_ts)
+    for s,e in zip(pres["Start DT"], pres["End DT"])
 ]
+intervals = [x for x in intervals if x]
 
 available_sec = sum_seconds(intervals)
-
-
-# =====================================================
-# CALCULATE DAILY CAPACITY
-# =====================================================
-
-def get_daily_capacity(date):
-    """Get available agent hours for a single day"""
-    d_start = pd.Timestamp(date)
-    d_end   = d_start + pd.Timedelta(days=1)
-    
-    day_intervals = [
-        x for x in (
-            clip(s, e, d_start, d_end)
-            for s, e in zip(pres_filtered["Start DT"], pres_filtered["End DT"])
-        ) if x
-    ]
-    
-    return sum_seconds(day_intervals) / 3600  # Convert to hours
 
 
 # =====================================================
 # METRICS
 # =====================================================
 
-# Calculate AHT with optional reopen exclusion
-if exclude_reopens:
-    aht_data = items_filtered[~items_filtered['IsReopened']]
-    avg_aht = aht_data["HandleSec"].mean()
-else:
-    avg_aht = items_filtered["HandleSec"].mean()
+avg_aht  = resp["HandleSec"].mean()
+avg_resp = resp["ResponseSec"].mean()
 
-avg_resp = art_filtered["ResponseSec"].mean()
-util = items_filtered["HandleSec"].sum() / available_sec if available_sec else 0
-emails_hr = len(items_filtered) / (available_sec / 3600) if available_sec else 0
-
-
-# =====================================================
-# HEADER
-# =====================================================
+emails_hr = len(resp) / (available_sec/3600) if available_sec else 0
+util = resp["HandleSec"].sum() / available_sec if available_sec else 0
 
 st.title("Email Department Performance")
-st.markdown(
-    f'<p class="date-context">Viewing: {start.strftime("%b %d, %Y")} – {end.strftime("%b %d, %Y")}</p>',
-    unsafe_allow_html=True
-)
+
+c1,c2,c3,c4 = st.columns(4)
+
+c1.metric("Replies Handled", f"{len(resp):,}")
+c2.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
+c3.metric("Avg Response Time (ART)", fmt_hm(avg_resp))
+c4.metric("Utilisation", f"{util:.1%}")
 
 
 # =====================================================
-# METRICS ROW
-# =====================================================
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-
-c1.metric("Emails Received", f"{len(art_filtered):,}")
-c2.metric("Emails Handled", f"{len(items_filtered):,}")
-c3.metric("Avg Handle Time", fmt_mmss(avg_aht))
-c4.metric("Avg Response Time", fmt_hm(avg_resp))
-c5.metric("Utilisation", f"{util:.1%}")
-c6.metric("Emails / Hour", f"{emails_hr:.1f}")
-
-
-# =====================================================
-# DAILY VOLUME VS CAPACITY CHART
+# DAILY VOLUME TREND
 # =====================================================
 
 st.markdown("---")
-st.subheader("Daily Volume vs Agent Capacity")
+st.subheader("Daily Replies")
 
-# Prepare daily data - EMAILS HANDLED
-daily_handled = items_filtered.groupby("Date").size().reset_index(name="Handled")
+daily = resp.groupby("Date").size().reset_index(name="Replies")
 
-# Prepare daily data - EMAILS RECEIVED (from ART)
-daily_received = art_filtered.groupby("Date").size().reset_index(name="Received")
-
-# Get capacity for each day
-date_range = pd.date_range(start, end, freq='D')
-daily_capacity = pd.DataFrame({
-    'Date': [d.date() for d in date_range],
-    'Capacity_Hours': [get_daily_capacity(d.date()) for d in date_range]
-})
-
-# Merge all metrics
-daily = daily_capacity.merge(daily_handled, on='Date', how='left')
-daily = daily.merge(daily_received, on='Date', how='left')
-daily['Handled'] = daily['Handled'].fillna(0)
-daily['Received'] = daily['Received'].fillna(0)
-
-# Convert Date to string for ordinal x-axis
-daily['DateStr'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d')
-daily['DateFull'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d, %Y')
-
-# Calculate backlog indicator
-daily['Backlog'] = daily['Received'] - daily['Handled']
-daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
-
-# Capacity bars (solid background showing agent hours) - LEFT Y-AXIS
-capacity_bars = alt.Chart(daily).mark_bar(
-    color='#94a3b8',
-    opacity=0.25
-).encode(
-    x=alt.X('DateStr:N', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b'), sort=None),
-    y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
-    tooltip=[
-        alt.Tooltip('DateFull:N', title='Date'),
-        alt.Tooltip('Capacity_Hours:Q', title='Agent Hours', format='.1f')
-    ]
+chart = alt.Chart(daily).mark_bar(color="#2563eb", opacity=0.6).encode(
+    x="Date:T",
+    y="Replies:Q"
 )
 
-# Emails Received line (demand - blue solid) - RIGHT Y-AXIS (shared with handled)
-received_line = alt.Chart(daily).mark_line(
-    strokeWidth=3,
-    color='#2563eb',
-    point=alt.OverlayMarkDef(
-        size=80,
-        filled=True,
-        color='#2563eb'
-    )
-).encode(
-    x=alt.X('DateStr:N', sort=None),
-    y=alt.Y('Received:Q', title='Email Volume', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
-    tooltip=[
-        alt.Tooltip('DateFull:N', title='Date'),
-        alt.Tooltip('Received:Q', title='Emails Received'),
-        alt.Tooltip('Handled:Q', title='Emails Handled'),
-        alt.Tooltip('Backlog:Q', title='Daily Backlog', format='+d')
-    ]
-)
-
-# Emails Handled line (throughput - green solid) - RIGHT Y-AXIS (shared with received)
-handled_line = alt.Chart(daily).mark_line(
-    strokeWidth=3,
-    color='#10b981',
-    point=alt.OverlayMarkDef(
-        size=70,
-        filled=True,
-        color='#10b981'
-    )
-).encode(
-    x=alt.X('DateStr:N', sort=None),
-    y=alt.Y('Handled:Q', title=None),  # Share the same y-axis as received, no duplicate title
-    tooltip=[
-        alt.Tooltip('DateFull:N', title='Date'),
-        alt.Tooltip('Handled:Q', title='Emails Handled'),
-        alt.Tooltip('Received:Q', title='Emails Received')
-    ]
-)
-
-# Layer: capacity on left axis, both email metrics on shared right axis
-email_lines = alt.layer(received_line, handled_line).resolve_scale(y='shared')
-
-daily_chart = alt.layer(
-    capacity_bars,
-    email_lines
-).resolve_scale(
-    y='independent'
-).properties(
-    height=400
-).configure_view(
-    strokeWidth=0
-)
-
-st.altair_chart(daily_chart, width='stretch')
-
-# Add legend
-st.markdown(
-    '<div style="display: flex; gap: 24px; margin-top: -8px; margin-bottom: 16px; font-size: 13px; color: #64748b;">'
-    '<span><span style="color: #94a3b8; font-weight: 700;">█</span> Agent Capacity (hours)</span>'
-    '<span><span style="color: #2563eb; font-weight: 700;">●</span> Emails Received</span>'
-    '<span><span style="color: #10b981; font-weight: 700;">●</span> Emails Handled</span>'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-# Add capacity insight with proper logic
-avg_capacity = daily['Capacity_Hours'].mean()
-avg_received = daily['Received'].mean()
-avg_handled = daily['Handled'].mean()
-total_backlog = daily['Cumulative_Backlog'].iloc[-1] if len(daily) > 0 else 0
-
-# Calculate theoretical handling capacity (hours * emails per hour)
-if avg_capacity > 0 and emails_hr > 0:
-    theoretical_capacity = avg_capacity * emails_hr  # How many emails we COULD handle
-    demand_vs_capacity_pct = (avg_received / theoretical_capacity) * 100
-    
-    # Key question: Are we keeping up with incoming emails?
-    if avg_received > avg_handled:
-        # Building backlog = understaffed
-        status_color = "#ef4444"  # Red
-        status = "⚠️ **Understaffed**"
-        message = f"Receiving {avg_received:.0f} emails/day but only handling {avg_handled:.0f}. Backlog growing by {avg_received - avg_handled:.0f}/day."
-    elif demand_vs_capacity_pct > 90:
-        # Keeping up but very tight margins
-        status_color = "#f59e0b"  # Amber
-        status = "⚡ **Near Capacity**"
-        message = f"Operating at {demand_vs_capacity_pct:.0f}% of theoretical capacity. Limited buffer for spikes."
-    else:
-        # Healthy buffer
-        status_color = "#10b981"  # Green
-        status = "✓ **Healthy Capacity**"
-        message = f"Capacity buffer: {theoretical_capacity - avg_received:.0f} emails/day available"
-    
-    st.markdown(
-        f'<div style="padding: 16px; background: {status_color}15; border-left: 4px solid {status_color}; '
-        f'border-radius: 8px; margin-top: 16px;">'
-        f'<p style="margin: 0; font-size: 14px; font-weight: 600; color: {status_color};">{status}</p>'
-        f'<p style="margin: 4px 0 0 0; font-size: 13px; color: #64748b;">{message}</p>'
-        f'<p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">'
-        f'Theoretical capacity: {avg_capacity:.1f} hrs/day × {emails_hr:.1f} emails/hr = {theoretical_capacity:.0f} emails | '
-        f'Cumulative backlog: {total_backlog:+.0f} emails'
-        f'</p></div>',
-        unsafe_allow_html=True
-    )
-
-
-# =====================================================
-# RESPONSE TIME TREND
-# =====================================================
-
-st.markdown("---")
-st.subheader("Average Response Time Trend")
-
-daily_resp = art_filtered.groupby("Date")["ResponseSec"].mean().reset_index()
-daily_resp['ResponseHours'] = daily_resp['ResponseSec'] / 3600
-
-response_chart = alt.Chart(daily_resp).mark_area(
-    line={'color': '#2563eb', 'strokeWidth': 2.5},
-    color=alt.Gradient(
-        gradient='linear',
-        stops=[
-            alt.GradientStop(color='#2563eb', offset=0),
-            alt.GradientStop(color='#2563eb00', offset=1)
-        ],
-        x1=0, x2=0, y1=0, y2=1
-    ),
-    opacity=0.3
-).encode(
-    x=alt.X('Date:T', title='Date', axis=alt.Axis(labelAngle=-45)),
-    y=alt.Y('ResponseHours:Q', title='Hours'),
-    tooltip=[
-        alt.Tooltip('Date:T', format='%b %d, %Y'),
-        alt.Tooltip('ResponseHours:Q', title='Response Time (hours)', format='.1f')
-    ]
-).properties(
-    height=250
-).configure_axis(
-    labelFontSize=12,
-    labelColor='#64748b',
-    titleFontSize=13,
-    titleColor='#0f172a',
-    titleFontWeight=600,
-    gridOpacity=0.08,
-    domainOpacity=0.2
-).configure_view(
-    strokeWidth=0
-)
-
-st.altair_chart(response_chart, width='stretch')
-
-
-# =====================================================
-# REOPENED EMAILS ANALYSIS (if enabled)
-# =====================================================
-
-if 'case_id_column' in locals() and case_id_column != "None (disabled)":
-    st.markdown("---")
-    st.subheader("Reopened Email Analysis")
-    
-    # Create reopen breakdown by day
-    daily_reopens = items_filtered.groupby(['Date', 'IsReopened']).size().reset_index(name='Count')
-    daily_reopens['Type'] = daily_reopens['IsReopened'].map({True: 'Reopened', False: 'First Touch'})
-    daily_reopens['DateStr'] = pd.to_datetime(daily_reopens['Date']).dt.strftime('%b %d')
-    
-    # Stacked bar chart
-    reopen_chart = alt.Chart(daily_reopens).mark_bar().encode(
-        x=alt.X('DateStr:N', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b'), sort=None),
-        y=alt.Y('Count:Q', title='Handle Events', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
-        color=alt.Color(
-            'Type:N',
-            scale=alt.Scale(
-                domain=['First Touch', 'Reopened'],
-                range=['#10b981', '#ef4444']
-            ),
-            legend=alt.Legend(title=None, orient='top', labelFontSize=13)
-        ),
-        tooltip=[
-            alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
-            alt.Tooltip('Type:N', title='Type'),
-            alt.Tooltip('Count:Q', title='Handles')
-        ]
-    ).properties(
-        height=250
-    ).configure_axis(
-        gridOpacity=0.08,
-        domainOpacity=0.2
-    ).configure_view(
-        strokeWidth=0
-    )
-    
-    st.altair_chart(reopen_chart, width='stretch')
-    
-    # Show top reopened cases
-    if len(reopened_cases) > 0:
-        st.markdown("##### Most Reopened Cases")
-        top_reopens = case_counts.sort_values(ascending=False).head(10).reset_index()
-        top_reopens.columns = ['Case ID', 'Times Handled']
-        
-        # Calculate total handle time per case
-        total_time_per_case = items_filtered.groupby(case_id_column)['HandleSec'].sum()
-        top_reopens['Total Handle Time'] = top_reopens['Case ID'].map(total_time_per_case).apply(fmt_mmss)
-        
-        st.dataframe(
-            top_reopens,
-            hide_index=True,
-            use_container_width=True
-        )
+st.altair_chart(chart, use_container_width=True)

@@ -3,6 +3,10 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
+# =====================================================
+# PAGE
+# =====================================================
+
 st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
@@ -21,21 +25,36 @@ AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 def read_csv_safe(path):
     try:
-        return pd.read_csv(path, encoding="cp1252")
+        return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except:
-        return pd.read_csv(path, encoding="utf-16", sep="\t")
+        return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
 
 
 # =====================================================
-# HELPERS
+# FORMATTERS
 # =====================================================
 
-def fmt(sec):
+# For short durations (AHT)
+def fmt_mmss(sec):
     if pd.isna(sec):
         return "—"
     m, s = divmod(int(sec), 60)
     return f"{m:02}:{s:02}"
 
+
+# For long durations (Response time)
+def fmt_hm(sec):
+    if pd.isna(sec):
+        return "—"
+    sec = int(sec)
+    hours = sec // 3600
+    minutes = (sec % 3600) // 60
+    return f"{hours}h {minutes:02}m"
+
+
+# =====================================================
+# HELPERS
+# =====================================================
 
 def clip(s, e, ws, we):
     if pd.isna(s) or pd.isna(e):
@@ -78,7 +97,7 @@ items["Date"] = assign_dt.dt.date
 
 
 # =====================================================
-# -------- RESPONSE TIME (ART PT)  ← FINAL FIX
+# -------- RESPONSE TIME (ART PT)
 # =====================================================
 
 art["OpenedDT"] = pd.to_datetime(
@@ -107,10 +126,17 @@ all_dates = pd.concat([
     art["Date"].dropna()
 ])
 
+if all_dates.empty:
+    st.error("No valid timestamps in dataset.")
+    st.stop()
+
 min_d = all_dates.min()
 max_d = all_dates.max()
 
-start, end = st.date_input("Date Range", value=(max_d - pd.Timedelta(days=6), max_d))
+start, end = st.date_input(
+    "Date Range",
+    value=(max_d - pd.Timedelta(days=6), max_d)
+)
 
 items = items[(items["Date"] >= start) & (items["Date"] <= end)]
 art   = art[(art["Date"] >= start) & (art["Date"] <= end)]
@@ -120,7 +146,7 @@ end_ts   = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
 # =====================================================
-# -------- PRESENCE CAPACITY
+# -------- PRESENCE → CAPACITY
 # =====================================================
 
 pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
@@ -153,8 +179,8 @@ st.title("Email Department Performance")
 c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("Total Emails", f"{len(items):,}")
-c2.metric("Avg Handle Time (AHT)", fmt(avg_aht))
-c3.metric("Avg Response Time", fmt(avg_resp))
+c2.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
+c3.metric("Avg Response Time", fmt_hm(avg_resp))
 c4.metric("Utilisation", f"{util:.1%}")
 c5.metric("Emails / Available Hr", f"{emails_hr:.1f}")
 

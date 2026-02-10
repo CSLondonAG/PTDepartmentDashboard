@@ -378,13 +378,6 @@ daily_handled = items_filtered.groupby("Date").size().reset_index(name="Handled"
 # Prepare daily data - EMAILS RECEIVED (from ART)
 daily_received = art_filtered.groupby("Date").size().reset_index(name="Received")
 
-# Get  for each day
-date_range = pd.date_range(start, end, freq='D')
-daily_ = pd.DataFrame({
-    'Date': [d.date() for d in date_range],
-    '_Hours': [get_daily_(d.date()) for d in date_range]
-})
-
 # Merge all metrics
 daily = daily_.merge(daily_handled, on='Date', how='left')
 daily = daily.merge(daily_received, on='Date', how='left')
@@ -578,5 +571,6 @@ if 'case_id_column' in locals() and case_id_column != "None (disabled)":
             hide_index=True,
             use_container_width=True
         )
+
 
 

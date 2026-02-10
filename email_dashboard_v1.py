@@ -3,9 +3,9 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
-# ======================================================
+# =====================================================
 # CONFIG
-# ======================================================
+# =====================================================
 
 st.set_page_config(layout="wide")
 
@@ -18,44 +18,40 @@ EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
-# ======================================================
-# CSV LOADER (cloud-safe encoding)
-# ======================================================
+# =====================================================
+# SAFE CSV LOADER (Cloud + Excel proof)
+# =====================================================
 
-def read_csv_safe(path: Path, parse_dates=None):
+def read_csv_safe(path: Path):
     try:
-        return pd.read_csv(
-            path,
-            encoding="cp1252",
-            dayfirst=True,
-            parse_dates=parse_dates,
-            low_memory=False
-        )
+        return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except UnicodeDecodeError:
-        return pd.read_csv(
-            path,
-            encoding="utf-16",
-            sep="\t",
-            dayfirst=True,
-            parse_dates=parse_dates,
-            low_memory=False
-        )
+        return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
 
 
 @st.cache_data
-def load():
-    items = read_csv_safe(BASE / ITEMS_FILE, ["Start DT","End DT"])
-    pres  = read_csv_safe(BASE / PRES_FILE,  ["Start DT","End DT"])
+def load_data():
+    items = read_csv_safe(BASE / ITEMS_FILE)
+    pres  = read_csv_safe(BASE / PRES_FILE)
 
     items.columns = items.columns.str.strip()
     pres.columns  = pres.columns.str.strip()
 
+    # ===== CRITICAL FIX =====
+    # force datetime coercion (prevents subtraction crash)
+    for df in (items, pres):
+        for c in ["Start DT", "End DT"]:
+            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+
+    items = items.dropna(subset=["Start DT", "End DT"])
+    pres  = pres.dropna(subset=["Start DT", "End DT"])
+
     return items, pres
 
 
-# ======================================================
+# =====================================================
 # HELPERS
-# ======================================================
+# =====================================================
 
 def fmt_mmss(sec):
     if pd.isna(sec):
@@ -69,26 +65,26 @@ def clip(s, e, ws, we):
     return (s2, e2) if e2 > s2 else None
 
 
-def seconds(intervals):
+def sum_seconds(intervals):
     return sum((e - s).total_seconds() for s, e in intervals)
 
 
-# ======================================================
-# LOAD DATA
-# ======================================================
+# =====================================================
+# LOAD
+# =====================================================
 
-items, pres = load()
+items, pres = load_data()
 
-# emails only
+# email only
 items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
 
 items["Duration"] = (items["End DT"] - items["Start DT"]).dt.total_seconds()
 items["Date"] = items["Start DT"].dt.date
 
 
-# ======================================================
+# =====================================================
 # DATE FILTER
-# ======================================================
+# =====================================================
 
 min_d = items["Date"].min()
 max_d = items["Date"].max()
@@ -106,14 +102,14 @@ ws = pd.Timestamp(start)
 we = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
-# ======================================================
-# CAPACITY CALCULATION (presence)
-# ======================================================
+# =====================================================
+# CAPACITY (Presence)
+# =====================================================
 
 pres = pres[
+    (pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)) &
     (pres["Start DT"] < we) &
-    (pres["End DT"]   > ws) &
-    (pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES))
+    (pres["End DT"] > ws)
 ]
 
 intervals = [
@@ -123,12 +119,12 @@ intervals = [
 
 intervals = [x for x in intervals if x]
 
-available_seconds = seconds(intervals)
+available_seconds = sum_seconds(intervals)
 
 
-# ======================================================
-# WORKLOAD
-# ======================================================
+# =====================================================
+# WORKLOAD METRICS
+# =====================================================
 
 handle_seconds = items["Duration"].sum()
 
@@ -140,44 +136,44 @@ emails_per_hour = (
 )
 
 
-# ======================================================
-# DAILY AGG
-# ======================================================
+# =====================================================
+# DAILY AGGREGATION
+# =====================================================
 
-daily_items = (
+daily = (
     items.groupby("Date")
-    .agg(Volume=("Duration","size"),
-         AHT=("Duration","mean"),
-         HandleSec=("Duration","sum"))
+    .agg(
+        Volume=("Duration", "size"),
+        AHT=("Duration", "mean"),
+        HandleSec=("Duration", "sum")
+    )
     .reset_index()
 )
 
 
-# daily capacity
-pres["Date"] = pres["Start DT"].dt.date
-
-def daily_capacity(d):
-    d_start = pd.Timestamp(d)
+def daily_capacity(day):
+    d_start = pd.Timestamp(day)
     d_end   = d_start + pd.Timedelta(days=1)
 
     iv = [
-        clip(s,e,d_start,d_end)
-        for s,e in zip(pres["Start DT"], pres["End DT"])
+        clip(s, e, d_start, d_end)
+        for s, e in zip(pres["Start DT"], pres["End DT"])
     ]
     iv = [x for x in iv if x]
-    return seconds(iv) / 60
+
+    return sum_seconds(iv) / 60
 
 
-daily_items["AvailMin"] = daily_items["Date"].apply(daily_capacity)
+daily["AvailMin"] = daily["Date"].apply(daily_capacity)
 
 
-# ======================================================
+# =====================================================
 # UI
-# ======================================================
+# =====================================================
 
 st.title("Email Department Performance")
 
-c1,c2,c3,c4 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 
 c1.metric("Total Emails", f"{len(items):,}")
 c2.metric("Avg Handle Time", fmt_mmss(items["Duration"].mean()))
@@ -187,19 +183,19 @@ c4.metric("Emails / Available Hr", f"{emails_per_hour:.1f}")
 st.markdown("---")
 
 
-# ======================================================
-# DAILY VOLUME vs CAPACITY
-# ======================================================
+# =====================================================
+# DAILY CAPACITY VS DEMAND
+# =====================================================
 
-bars = alt.Chart(daily_items).mark_bar(opacity=0.3).encode(
+bars = alt.Chart(daily).mark_bar(opacity=0.3).encode(
     x="Date:T",
     y=alt.Y("AvailMin:Q", title="Available Minutes")
 )
 
-line = alt.Chart(daily_items).mark_line(point=True).encode(
+line = alt.Chart(daily).mark_line(point=True).encode(
     x="Date:T",
     y=alt.Y("Volume:Q", title="Email Volume"),
-    tooltip=["Date:T","Volume","AvailMin"]
+    tooltip=["Date:T", "Volume", "AvailMin"]
 )
 
 st.altair_chart(
@@ -208,9 +204,9 @@ st.altair_chart(
 )
 
 
-# ======================================================
-# HOURLY VIEW
-# ======================================================
+# =====================================================
+# HOURLY COVERAGE
+# =====================================================
 
 st.markdown("---")
 st.subheader("Hourly Coverage")
@@ -230,16 +226,16 @@ for h in hours:
     vol = len(items[(items["Start DT"] >= h) & (items["Start DT"] < h_end)])
 
     iv = [
-        clip(s,e,h,h_end)
-        for s,e in zip(pres["Start DT"], pres["End DT"])
+        clip(s, e, h, h_end)
+        for s, e in zip(pres["Start DT"], pres["End DT"])
     ]
     iv = [x for x in iv]
 
-    avail = seconds(iv) / 60
+    avail = sum_seconds(iv) / 60
 
     rows.append([h, vol, avail])
 
-hourly = pd.DataFrame(rows, columns=["Hour","Volume","AvailMin"])
+hourly = pd.DataFrame(rows, columns=["Hour", "Volume", "AvailMin"])
 
 bars = alt.Chart(hourly).mark_bar(opacity=0.3).encode(
     x="Hour:T",

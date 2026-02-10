@@ -19,7 +19,7 @@ AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# SAFE CSV LOADER (Cloud + Excel proof)
+# SAFE CSV LOADER
 # =====================================================
 
 def read_csv_safe(path: Path):
@@ -37,8 +37,7 @@ def load_data():
     items.columns = items.columns.str.strip()
     pres.columns  = pres.columns.str.strip()
 
-    # ===== CRITICAL FIX =====
-    # force datetime coercion (prevents subtraction crash)
+    # ===== FORCE DATETIME (critical) =====
     for df in (items, pres):
         for c in ["Start DT", "End DT"]:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
@@ -50,7 +49,7 @@ def load_data():
 
 
 # =====================================================
-# HELPERS
+# HARDENED HELPERS
 # =====================================================
 
 def fmt_mmss(sec):
@@ -61,12 +60,24 @@ def fmt_mmss(sec):
 
 
 def clip(s, e, ws, we):
+    if pd.isna(s) or pd.isna(e):
+        return None
     s2, e2 = max(s, ws), min(e, we)
     return (s2, e2) if e2 > s2 else None
 
 
 def sum_seconds(intervals):
-    return sum((e - s).total_seconds() for s, e in intervals)
+    """Never assume tuple validity"""
+    total = 0.0
+    for iv in intervals:
+        if not iv or len(iv) != 2:
+            continue
+        s, e = iv
+        if pd.isna(s) or pd.isna(e):
+            continue
+        if e > s:
+            total += (e - s).total_seconds()
+    return total
 
 
 # =====================================================
@@ -79,6 +90,8 @@ items, pres = load_data()
 items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
 
 items["Duration"] = (items["End DT"] - items["Start DT"]).dt.total_seconds()
+items = items.dropna(subset=["Duration"])
+
 items["Date"] = items["Start DT"].dt.date
 
 
@@ -103,7 +116,7 @@ we = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
 # =====================================================
-# CAPACITY (Presence)
+# CAPACITY (presence)
 # =====================================================
 
 pres = pres[
@@ -113,11 +126,12 @@ pres = pres[
 ]
 
 intervals = [
-    clip(s, e, ws, we)
-    for s, e in zip(pres["Start DT"], pres["End DT"])
+    x for x in (
+        clip(s, e, ws, we)
+        for s, e in zip(pres["Start DT"], pres["End DT"])
+    )
+    if x
 ]
-
-intervals = [x for x in intervals if x]
 
 available_seconds = sum_seconds(intervals)
 
@@ -137,15 +151,14 @@ emails_per_hour = (
 
 
 # =====================================================
-# DAILY AGGREGATION
+# DAILY AGG
 # =====================================================
 
 daily = (
     items.groupby("Date")
     .agg(
         Volume=("Duration", "size"),
-        AHT=("Duration", "mean"),
-        HandleSec=("Duration", "sum")
+        AHT=("Duration", "mean")
     )
     .reset_index()
 )
@@ -156,10 +169,12 @@ def daily_capacity(day):
     d_end   = d_start + pd.Timedelta(days=1)
 
     iv = [
-        clip(s, e, d_start, d_end)
-        for s, e in zip(pres["Start DT"], pres["End DT"])
+        x for x in (
+            clip(s, e, d_start, d_end)
+            for s, e in zip(pres["Start DT"], pres["End DT"])
+        )
+        if x
     ]
-    iv = [x for x in iv if x]
 
     return sum_seconds(iv) / 60
 
@@ -189,13 +204,12 @@ st.markdown("---")
 
 bars = alt.Chart(daily).mark_bar(opacity=0.3).encode(
     x="Date:T",
-    y=alt.Y("AvailMin:Q", title="Available Minutes")
+    y="AvailMin:Q"
 )
 
 line = alt.Chart(daily).mark_line(point=True).encode(
     x="Date:T",
-    y=alt.Y("Volume:Q", title="Email Volume"),
-    tooltip=["Date:T", "Volume", "AvailMin"]
+    y="Volume:Q"
 )
 
 st.altair_chart(
@@ -226,10 +240,12 @@ for h in hours:
     vol = len(items[(items["Start DT"] >= h) & (items["Start DT"] < h_end)])
 
     iv = [
-        clip(s, e, h, h_end)
-        for s, e in zip(pres["Start DT"], pres["End DT"])
+        x for x in (
+            clip(s, e, h, h_end)
+            for s, e in zip(pres["Start DT"], pres["End DT"])
+        )
+        if x
     ]
-    iv = [x for x in iv]
 
     avail = sum_seconds(iv) / 60
 

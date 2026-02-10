@@ -3,42 +3,32 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
-# =====================================================
+# ======================================================
 # CONFIG
-# =====================================================
+# ======================================================
 
-st.set_page_config(
-    page_title="Email Performance Dashboard",
-    layout="wide"
-)
+st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
 
-FILES = [
-    "report1770723329010.csv",
-    "report1770723306446.csv"
-]
+ITEMS_FILE = "ItemsPT.csv"
+PRES_FILE  = "PresencePT.csv"
 
 EMAIL_CHANNEL = "casesChannel"
+AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
-# =====================================================
-# ROBUST CSV LOADER (fixes UnicodeDecodeError on Cloud)
-# =====================================================
+# ======================================================
+# CSV LOADER (cloud-safe encoding)
+# ======================================================
 
-def read_csv_safe(path: Path):
-    """
-    Handles:
-    - UTF-8
-    - Windows cp1252 (Excel/Salesforce default)
-    - UTF-16 exports
-    """
+def read_csv_safe(path: Path, parse_dates=None):
     try:
         return pd.read_csv(
             path,
             encoding="cp1252",
             dayfirst=True,
-            parse_dates=["Start DT", "End DT"],
+            parse_dates=parse_dates,
             low_memory=False
         )
     except UnicodeDecodeError:
@@ -47,29 +37,25 @@ def read_csv_safe(path: Path):
             encoding="utf-16",
             sep="\t",
             dayfirst=True,
-            parse_dates=["Start DT", "End DT"],
+            parse_dates=parse_dates,
             low_memory=False
         )
 
 
 @st.cache_data
-def load_data():
-    dfs = []
-    for f in FILES:
-        p = BASE / f
-        df = read_csv_safe(p)
-        dfs.append(df)
+def load():
+    items = read_csv_safe(BASE / ITEMS_FILE, ["Start DT","End DT"])
+    pres  = read_csv_safe(BASE / PRES_FILE,  ["Start DT","End DT"])
 
-    df = pd.concat(dfs, ignore_index=True)
+    items.columns = items.columns.str.strip()
+    pres.columns  = pres.columns.str.strip()
 
-    df.columns = df.columns.str.strip()
-
-    return df
+    return items, pres
 
 
-# =====================================================
+# ======================================================
 # HELPERS
-# =====================================================
+# ======================================================
 
 def fmt_mmss(sec):
     if pd.isna(sec):
@@ -78,29 +64,34 @@ def fmt_mmss(sec):
     return f"{m:02}:{s:02}"
 
 
-# =====================================================
-# LOAD
-# =====================================================
-
-df = load_data()
-
-# keep only email channel
-df = df[df["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
-
-# duration
-df["Duration"] = (df["End DT"] - df["Start DT"]).dt.total_seconds()
-
-df = df.dropna(subset=["Duration"])
-
-df["Date"] = df["Start DT"].dt.date
+def clip(s, e, ws, we):
+    s2, e2 = max(s, ws), min(e, we)
+    return (s2, e2) if e2 > s2 else None
 
 
-# =====================================================
-# SIDEBAR DATE FILTER
-# =====================================================
+def seconds(intervals):
+    return sum((e - s).total_seconds() for s, e in intervals)
 
-min_d = df["Date"].min()
-max_d = df["Date"].max()
+
+# ======================================================
+# LOAD DATA
+# ======================================================
+
+items, pres = load()
+
+# emails only
+items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
+
+items["Duration"] = (items["End DT"] - items["Start DT"]).dt.total_seconds()
+items["Date"] = items["Start DT"].dt.date
+
+
+# ======================================================
+# DATE FILTER
+# ======================================================
+
+min_d = items["Date"].min()
+max_d = items["Date"].max()
 
 start, end = st.sidebar.date_input(
     "Date Range",
@@ -109,74 +100,158 @@ start, end = st.sidebar.date_input(
     max_value=max_d
 )
 
-df = df[(df["Date"] >= start) & (df["Date"] <= end)]
+items = items[(items["Date"] >= start) & (items["Date"] <= end)]
+
+ws = pd.Timestamp(start)
+we = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
-# =====================================================
-# CORE METRICS
-# =====================================================
+# ======================================================
+# CAPACITY CALCULATION (presence)
+# ======================================================
 
-total_emails = len(df)
-aht = df["Duration"].mean()
+pres = pres[
+    (pres["Start DT"] < we) &
+    (pres["End DT"]   > ws) &
+    (pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES))
+]
 
-daily = (
-    df.groupby("Date")
-      .agg(
-          Volume=("Duration", "size"),
-          AHT=("Duration", "mean")
-      )
-      .reset_index()
+intervals = [
+    clip(s, e, ws, we)
+    for s, e in zip(pres["Start DT"], pres["End DT"])
+]
+
+intervals = [x for x in intervals if x]
+
+available_seconds = seconds(intervals)
+
+
+# ======================================================
+# WORKLOAD
+# ======================================================
+
+handle_seconds = items["Duration"].sum()
+
+utilisation = handle_seconds / available_seconds if available_seconds else 0
+
+emails_per_hour = (
+    len(items) / (available_seconds / 3600)
+    if available_seconds else 0
 )
 
-avg_per_day = daily["Volume"].mean() if not daily.empty else 0
-peak_day = daily["Volume"].max() if not daily.empty else 0
+
+# ======================================================
+# DAILY AGG
+# ======================================================
+
+daily_items = (
+    items.groupby("Date")
+    .agg(Volume=("Duration","size"),
+         AHT=("Duration","mean"),
+         HandleSec=("Duration","sum"))
+    .reset_index()
+)
 
 
-# =====================================================
+# daily capacity
+pres["Date"] = pres["Start DT"].dt.date
+
+def daily_capacity(d):
+    d_start = pd.Timestamp(d)
+    d_end   = d_start + pd.Timedelta(days=1)
+
+    iv = [
+        clip(s,e,d_start,d_end)
+        for s,e in zip(pres["Start DT"], pres["End DT"])
+    ]
+    iv = [x for x in iv if x]
+    return seconds(iv) / 60
+
+
+daily_items["AvailMin"] = daily_items["Date"].apply(daily_capacity)
+
+
+# ======================================================
 # UI
-# =====================================================
+# ======================================================
 
-st.title("Email Performance Dashboard")
+st.title("Email Department Performance")
 
-c1, c2, c3, c4 = st.columns(4)
+c1,c2,c3,c4 = st.columns(4)
 
-c1.metric("Total Emails", f"{total_emails:,}")
-c2.metric("Avg Handle Time", fmt_mmss(aht))
-c3.metric("Avg Emails / Day", f"{avg_per_day:.0f}")
-c4.metric("Peak Day Volume", f"{peak_day:.0f}")
+c1.metric("Total Emails", f"{len(items):,}")
+c2.metric("Avg Handle Time", fmt_mmss(items["Duration"].mean()))
+c3.metric("Utilisation", f"{utilisation:.1%}")
+c4.metric("Emails / Available Hr", f"{emails_per_hour:.1f}")
 
 st.markdown("---")
 
 
-# =====================================================
-# CHARTS
-# =====================================================
+# ======================================================
+# DAILY VOLUME vs CAPACITY
+# ======================================================
 
-if daily.empty:
-    st.info("No data for selected range.")
-    st.stop()
-
-vol_chart = (
-    alt.Chart(daily)
-    .mark_line(point=True)
-    .encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("Volume:Q", title="Email Volume"),
-        tooltip=["Date:T", "Volume"]
-    )
-    .properties(height=300)
+bars = alt.Chart(daily_items).mark_bar(opacity=0.3).encode(
+    x="Date:T",
+    y=alt.Y("AvailMin:Q", title="Available Minutes")
 )
 
-aht_chart = (
-    alt.Chart(daily)
-    .mark_line(point=True)
-    .encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("AHT:Q", title="Avg Handle Time (sec)"),
-        tooltip=["Date:T", alt.Tooltip("AHT:Q", format=".0f")]
-    )
-    .properties(height=300)
+line = alt.Chart(daily_items).mark_line(point=True).encode(
+    x="Date:T",
+    y=alt.Y("Volume:Q", title="Email Volume"),
+    tooltip=["Date:T","Volume","AvailMin"]
 )
 
-st.altair_chart(vol_chart, use_container_width=True)
-st.altair_chart(aht_chart, use_container_width=True)
+st.altair_chart(
+    alt.layer(bars, line).resolve_scale(y="independent").properties(height=350),
+    use_container_width=True
+)
+
+
+# ======================================================
+# HOURLY VIEW
+# ======================================================
+
+st.markdown("---")
+st.subheader("Hourly Coverage")
+
+sel = st.date_input("Select day", value=end, min_value=min_d, max_value=max_d)
+
+d_start = pd.Timestamp(sel)
+d_end   = d_start + pd.Timedelta(days=1)
+
+hours = pd.date_range(d_start, d_end, freq="h", inclusive="left")
+
+rows = []
+
+for h in hours:
+    h_end = h + pd.Timedelta(hours=1)
+
+    vol = len(items[(items["Start DT"] >= h) & (items["Start DT"] < h_end)])
+
+    iv = [
+        clip(s,e,h,h_end)
+        for s,e in zip(pres["Start DT"], pres["End DT"])
+    ]
+    iv = [x for x in iv]
+
+    avail = seconds(iv) / 60
+
+    rows.append([h, vol, avail])
+
+hourly = pd.DataFrame(rows, columns=["Hour","Volume","AvailMin"])
+
+bars = alt.Chart(hourly).mark_bar(opacity=0.3).encode(
+    x="Hour:T",
+    y="AvailMin:Q"
+)
+
+line = alt.Chart(hourly).mark_line(point=True).encode(
+    x="Hour:T",
+    y="Volume:Q"
+)
+
+st.altair_chart(
+    alt.layer(bars, line).resolve_scale(y="independent").properties(height=300),
+    use_container_width=True
+)

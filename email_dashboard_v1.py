@@ -4,173 +4,100 @@ import altair as alt
 from pathlib import Path
 
 # =====================================================
-# PAGE
+# CONFIG
 # =====================================================
 
 st.set_page_config(layout="wide")
 
-
-# =====================================================
-# DESIGN SYSTEM (CSS)
-# =====================================================
-
-st.markdown("""
-<style>
-html, body, [class*="css"]  {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-/* Title */
-h1 {
-    font-size: 32px !important;
-    font-weight: 700 !important;
-    letter-spacing: -0.02em;
-    color: #0f172a;
-    margin-bottom: 6px !important;
-}
-
-.caption-date {
-    font-size: 13px;
-    color: #64748b;
-    margin-bottom: 32px;
-}
-
-/* Metric cards */
-[data-testid="metric-container"] {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 20px;
-    transition: all 150ms ease;
-}
-
-[data-testid="metric-container"]:hover {
-    background: #ffffff;
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-}
-
-[data-testid="stMetricValue"] {
-    font-size: 26px !important;
-    font-weight: 700 !important;
-    color: #0f172a !important;
-}
-
-[data-testid="stMetricLabel"] {
-    font-size: 13px !important;
-    color: #64748b !important;
-}
-
-/* Dividers */
-hr {
-    border: none;
-    border-top: 1px solid rgba(15,23,42,0.12);
-    margin: 64px 0 32px 0;
-}
-
-/* Charts */
-[data-testid="stVegaLiteChart"] {
-    border-radius: 12px;
-    overflow: hidden;
-}
-</style>
-""", unsafe_allow_html=True)
-
-
-# =====================================================
-# FILES
-# =====================================================
-
 BASE = Path(__file__).parent
+
 ITEMS_FILE = "ItemsPT.csv"
-PRES_FILE = "PresencePT.csv"
+PRES_FILE  = "PresencePT.csv"
+ART_FILE   = "ART PT.csv"   # ← NEW (true response times)
 
 EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# SAFE CSV LOADER
+# SAFE CSV
 # =====================================================
 
 def read_csv_safe(path):
     try:
-        return pd.read_csv(path, encoding="cp1252")
+        return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except:
-        return pd.read_csv(path, encoding="utf-16", sep="\t")
-
-
-@st.cache_data
-def load():
-    items = read_csv_safe(BASE / ITEMS_FILE)
-    pres  = read_csv_safe(BASE / PRES_FILE)
-
-    for df in (items, pres):
-        df.columns = df.columns.str.strip()
-        for c in ["Start DT", "End DT"]:
-            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
-
-    items = items.dropna(subset=["Start DT", "End DT"])
-    pres  = pres.dropna(subset=["Start DT", "End DT"])
-
-    return items, pres
-
-
-# =====================================================
-# HELPERS (bulletproof)
-# =====================================================
-
-def fmt(sec):
-    if pd.isna(sec):
-        return "—"
-    m, s = divmod(int(sec), 60)
-    return f"{m:02}:{s:02}"
-
-
-def clip(s, e, ws, we):
-    if pd.isna(s) or pd.isna(e):
-        return None
-    s2, e2 = max(s, ws), min(e, we)
-    return (s2, e2) if e2 > s2 else None
-
-
-def sum_seconds(intervals):
-    total = 0
-    for iv in intervals:
-        if not iv:
-            continue
-        s, e = iv
-        total += (e - s).total_seconds()
-    return total
+        return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
 
 
 # =====================================================
 # LOAD
 # =====================================================
 
-items, pres = load()
+@st.cache_data
+def load():
+    items = read_csv_safe(BASE / ITEMS_FILE)
+    pres  = read_csv_safe(BASE / PRES_FILE)
+    art   = read_csv_safe(BASE / ART_FILE)
 
-items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
+    for df in (items, pres, art):
+        df.columns = df.columns.str.strip()
 
-# -----------------------------------------------------
-# TIME METRICS
-# -----------------------------------------------------
+    # ---- datetime coercion ----
+    for c in ["Start DT","End DT"]:
+        if c in pres:
+            pres[c] = pd.to_datetime(pres[c], errors="coerce", dayfirst=True)
 
-items["HandleSec"] = (items["End DT"] - items["Start DT"]).dt.total_seconds()
+    for c in ["Assign Date","Assign Time"]:
+        if c in items:
+            items[c] = items[c].astype(str)
 
-# NEW — response time (customer wait)
-items["ResponseSec"] = items["HandleSec"]
+    # ART file expected fields:
+    # Received DT + Resolved DT
+    for c in ["Received DT","Resolved DT"]:
+        if c in art:
+            art[c] = pd.to_datetime(art[c], errors="coerce", dayfirst=True)
 
-items = items.dropna(subset=["HandleSec"])
+    return items, pres, art
 
-items["Date"] = items["Start DT"].dt.date
+
+items, pres, art = load()
 
 
 # =====================================================
-# DATE RANGE (visible, not sidebar)
+# AHT (ItemsPT)
 # =====================================================
 
-min_d = items["Date"].min()
-max_d = items["Date"].max()
+items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL]
+
+items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
+
+items["Assign DT"] = pd.to_datetime(
+    items["Assign Date"] + " " + items["Assign Time"],
+    errors="coerce",
+    dayfirst=True
+)
+
+items["Date"] = items["Assign DT"].dt.date
+
+
+# =====================================================
+# RESPONSE TIME (ART PT)
+# =====================================================
+
+art["ResponseSec"] = (
+    art["Resolved DT"] - art["Received DT"]
+).dt.total_seconds()
+
+art["Date"] = art["Received DT"].dt.date
+
+
+# =====================================================
+# DATE RANGE
+# =====================================================
+
+min_d = min(items["Date"].min(), art["Date"].min())
+max_d = max(items["Date"].max(), art["Date"].max())
 
 start, end = st.date_input(
     "Date Range",
@@ -180,120 +107,85 @@ start, end = st.date_input(
 ws = pd.Timestamp(start)
 we = pd.Timestamp(end) + pd.Timedelta(days=1)
 
-items = items[(items["Date"] >= start) & (items["Date"] <= end)]
+items = items[(items["Date"]>=start)&(items["Date"]<=end)]
+art   = art[(art["Date"]>=start)&(art["Date"]<=end)]
 
 
 # =====================================================
-# HEADER
+# CAPACITY (Presence)
 # =====================================================
 
-st.title("Email Department Performance")
-st.markdown(
-    f"<div class='caption-date'>Viewing: {start:%b %d, %Y} – {end:%b %d, %Y}</div>",
-    unsafe_allow_html=True
-)
+def clip(s,e,ws,we):
+    s2,e2 = max(s,ws), min(e,we)
+    return (s2,e2) if e2>s2 else None
 
+def sum_sec(iv):
+    return sum((e-s).total_seconds() for s,e in iv)
 
-# =====================================================
-# CAPACITY (presence)
-# =====================================================
-
-pres = pres[
-    pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)
-]
+pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
 
 intervals = [
     x for x in (
-        clip(s, e, ws, we)
-        for s, e in zip(pres["Start DT"], pres["End DT"])
+        clip(s,e,ws,we)
+        for s,e in zip(pres["Start DT"], pres["End DT"])
     ) if x
 ]
 
-available_sec = sum_seconds(intervals)
+available_sec = sum_sec(intervals)
 
 
 # =====================================================
 # METRICS
 # =====================================================
 
-handle_sec = items["HandleSec"].sum()
-util = handle_sec / available_sec if available_sec else 0
-emails_hr = len(items) / (available_sec / 3600) if available_sec else 0
+avg_aht = items["HandleSec"].mean()
+avg_response = art["ResponseSec"].mean()
 
-avg_handle = items["HandleSec"].mean()
-avg_response = items["ResponseSec"].mean()
+util = items["HandleSec"].sum() / available_sec if available_sec else 0
+emails_hr = len(items) / (available_sec/3600) if available_sec else 0
 
-c1, c2, c3, c4, c5 = st.columns(5)
+def fmt(sec):
+    if pd.isna(sec): return "—"
+    m,s = divmod(int(sec),60)
+    return f"{m:02}:{s:02}"
+
+st.title("Email Department Performance")
+
+c1,c2,c3,c4,c5 = st.columns(5)
 
 c1.metric("Total Emails", f"{len(items):,}")
-c2.metric("Avg Handle Time", fmt(avg_handle))
+c2.metric("Avg Handle Time", fmt(avg_aht))
 c3.metric("Avg Response Time", fmt(avg_response))
 c4.metric("Utilisation", f"{util:.1%}")
 c5.metric("Emails / Available Hr", f"{emails_hr:.1f}")
 
 
 # =====================================================
-# DAILY AGGREGATION
+# DAILY TREND
 # =====================================================
 
-st.markdown("<hr>", unsafe_allow_html=True)
+st.markdown("---")
 
-daily = (
-    items.groupby("Date")
-    .agg(
-        Volume=("HandleSec", "size"),
-        Response=("ResponseSec", "mean")
-    )
-    .reset_index()
-)
+daily_items = items.groupby("Date").size().reset_index(name="Volume")
+daily_resp  = art.groupby("Date")["ResponseSec"].mean().reset_index(name="Response")
 
-if daily.empty:
-    st.info("No emails in this period.")
-    st.stop()
+daily = daily_items.merge(daily_resp, on="Date", how="left")
 
-
-# =====================================================
-# CHARTS (styled)
-# =====================================================
-
-alt.themes.enable("none")
-
-bars = alt.Chart(daily).mark_bar(
-    opacity=0.15,
-    color="#cbd5e1"
-).encode(
+bars = alt.Chart(daily).mark_bar(opacity=0.15, color="#cbd5e1").encode(
     x="Date:T",
     y="Volume:Q"
 )
 
-vol_line = alt.Chart(daily).mark_line(
+line = alt.Chart(daily).mark_line(
     strokeWidth=2.5,
     color="#2563eb",
     point=True
 ).encode(
     x="Date:T",
-    y="Volume:Q"
+    y="Response:Q"
 )
 
-resp_line = alt.Chart(daily).mark_line(
-    strokeWidth=2.5,
-    color="#ef4444",
-    point=True
-).encode(
-    x="Date:T",
-    y="Response:Q",
-    tooltip=[
-        alt.Tooltip("Date:T"),
-        alt.Tooltip("Response:Q", title="Avg Response (sec)", format=".0f")
-    ]
+st.altair_chart(
+    alt.layer(bars,line).resolve_scale(y="independent"),
+    use_container_width=True
 )
-
-chart = alt.layer(bars, vol_line, resp_line).resolve_scale(y="independent")\
-    .configure_axis(
-        labelColor="#64748b",
-        titleColor="#64748b",
-        gridOpacity=0.08,
-        domainOpacity=0.15
-    ).configure_view(strokeWidth=0)
-
-st.altair_chart(chart, use_container_width=True)

@@ -356,20 +356,20 @@ daily['Received'] = daily['Received'].fillna(0)
 daily['Backlog'] = daily['Received'] - daily['Handled']
 daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
 
-# Capacity bars (background)
+# Capacity bars (solid background showing agent hours)
 capacity_bars = alt.Chart(daily).mark_bar(
-    opacity=0.2,
-    color='#cbd5e1'
+    color='#94a3b8',
+    opacity=0.25
 ).encode(
-    x=alt.X('Date:T', title='Date', axis=alt.Axis(labelAngle=-45)),
-    y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available'),
+    x=alt.X('Date:T', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b')),
+    y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
-        alt.Tooltip('Date:T', format='%b %d, %Y'),
-        alt.Tooltip('Capacity_Hours:Q', title='Capacity (hours)', format='.1f')
+        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+        alt.Tooltip('Capacity_Hours:Q', title='Agent Hours', format='.1f')
     ]
 )
 
-# Received line (demand)
+# Emails Received line (demand - blue solid)
 received_line = alt.Chart(daily).mark_line(
     strokeWidth=3,
     color='#2563eb',
@@ -379,48 +379,44 @@ received_line = alt.Chart(daily).mark_line(
         color='#2563eb'
     )
 ).encode(
-    x='Date:T',
-    y=alt.Y('Received:Q', title='Email Volume'),
+    x=alt.X('Date:T'),
+    y=alt.Y('Received:Q', title='Email Volume', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
-        alt.Tooltip('Date:T', format='%b %d, %Y'),
+        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
         alt.Tooltip('Received:Q', title='Emails Received'),
         alt.Tooltip('Handled:Q', title='Emails Handled'),
-        alt.Tooltip('Backlog:Q', title='Daily Backlog')
+        alt.Tooltip('Backlog:Q', title='Daily Backlog', format='+d')
     ]
 )
 
-# Handled line (actual throughput) - dashed
+# Emails Handled line (throughput - green solid)
 handled_line = alt.Chart(daily).mark_line(
-    strokeWidth=2,
+    strokeWidth=3,
     color='#10b981',
-    strokeDash=[5, 5],
     point=alt.OverlayMarkDef(
-        size=60,
+        size=70,
         filled=True,
         color='#10b981'
     )
 ).encode(
-    x='Date:T',
+    x=alt.X('Date:T'),
     y=alt.Y('Handled:Q'),
     tooltip=[
-        alt.Tooltip('Date:T', format='%b %d, %Y'),
-        alt.Tooltip('Handled:Q', title='Emails Handled')
+        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+        alt.Tooltip('Handled:Q', title='Emails Handled'),
+        alt.Tooltip('Received:Q', title='Emails Received')
     ]
 )
 
-# Layer and configure
-daily_chart = alt.layer(capacity_bars, received_line, handled_line).resolve_scale(
+# Layer with independent Y-axes
+daily_chart = alt.layer(
+    capacity_bars,
+    received_line,
+    handled_line
+).resolve_scale(
     y='independent'
 ).properties(
     height=400
-).configure_axis(
-    labelFontSize=12,
-    labelColor='#64748b',
-    titleFontSize=13,
-    titleColor='#0f172a',
-    titleFontWeight=600,
-    gridOpacity=0.08,
-    domainOpacity=0.2
 ).configure_view(
     strokeWidth=0
 )
@@ -429,10 +425,10 @@ st.altair_chart(daily_chart, use_container_width=True)
 
 # Add legend
 st.markdown(
-    '<div style="display: flex; gap: 24px; margin-top: -8px; margin-bottom: 16px; font-size: 13px;">'
-    '<span style="color: #2563eb;">● Emails Received</span>'
-    '<span style="color: #10b981;">⚬ Emails Handled</span>'
-    '<span style="color: #cbd5e1;">▮ Agent Capacity (hours)</span>'
+    '<div style="display: flex; gap: 24px; margin-top: -8px; margin-bottom: 16px; font-size: 13px; color: #64748b;">'
+    '<span><span style="color: #94a3b8; font-weight: 700;">█</span> Agent Capacity (hours)</span>'
+    '<span><span style="color: #2563eb; font-weight: 700;">●</span> Emails Received</span>'
+    '<span><span style="color: #10b981; font-weight: 700;">●</span> Emails Handled</span>'
     '</div>',
     unsafe_allow_html=True
 )

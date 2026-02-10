@@ -361,7 +361,7 @@ capacity_bars = alt.Chart(daily).mark_bar(
     color='#94a3b8',
     opacity=0.25
 ).encode(
-    x=alt.X('Date:T', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b')),
+    x=alt.X('Date:O', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b', format='%b %d')),
     y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
         alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
@@ -379,7 +379,7 @@ received_line = alt.Chart(daily).mark_line(
         color='#2563eb'
     )
 ).encode(
-    x=alt.X('Date:T'),
+    x=alt.X('Date:O'),
     y=alt.Y('Received:Q', title='Email Volume', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
         alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
@@ -399,7 +399,7 @@ handled_line = alt.Chart(daily).mark_line(
         color='#10b981'
     )
 ).encode(
-    x=alt.X('Date:T'),
+    x=alt.X('Date:O'),
     y=alt.Y('Handled:Q'),
     tooltip=[
         alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),

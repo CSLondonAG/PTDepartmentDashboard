@@ -316,13 +316,14 @@ st.markdown(
 # METRICS ROW
 # =====================================================
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-c1.metric("Total Emails", f"{len(items_filtered):,}")
-c2.metric("Avg Handle Time", fmt_mmss(avg_aht))
-c3.metric("Avg Response Time", fmt_hm(avg_resp))
-c4.metric("Utilisation", f"{util:.1%}")
-c5.metric("Emails / Hour", f"{emails_hr:.1f}")
+c1.metric("Emails Received", f"{len(art_filtered):,}")
+c2.metric("Emails Handled", f"{len(items_filtered):,}")
+c3.metric("Avg Handle Time", fmt_mmss(avg_aht))
+c4.metric("Avg Response Time", fmt_hm(avg_resp))
+c5.metric("Utilisation", f"{util:.1%}")
+c6.metric("Emails / Hour", f"{emails_hr:.1f}")
 
 
 # =====================================================
@@ -332,8 +333,11 @@ c5.metric("Emails / Hour", f"{emails_hr:.1f}")
 st.markdown("---")
 st.subheader("Daily Volume vs Agent Capacity")
 
-# Prepare daily data
-daily_volume = items_filtered.groupby("Date").size().reset_index(name="Volume")
+# Prepare daily data - EMAILS HANDLED
+daily_handled = items_filtered.groupby("Date").size().reset_index(name="Handled")
+
+# Prepare daily data - EMAILS RECEIVED (from ART)
+daily_received = art_filtered.groupby("Date").size().reset_index(name="Received")
 
 # Get capacity for each day
 date_range = pd.date_range(start, end, freq='D')
@@ -342,16 +346,15 @@ daily_capacity = pd.DataFrame({
     'Capacity_Hours': [get_daily_capacity(d.date()) for d in date_range]
 })
 
-# Merge
-daily = daily_capacity.merge(daily_volume, on='Date', how='left')
-daily['Volume'] = daily['Volume'].fillna(0)
+# Merge all metrics
+daily = daily_capacity.merge(daily_handled, on='Date', how='left')
+daily = daily.merge(daily_received, on='Date', how='left')
+daily['Handled'] = daily['Handled'].fillna(0)
+daily['Received'] = daily['Received'].fillna(0)
 
-# Calculate capacity utilization for color coding
-daily['Utilization_Pct'] = daily.apply(
-    lambda row: (row['Volume'] / (row['Capacity_Hours'] * emails_hr)) * 100 
-    if row['Capacity_Hours'] > 0 and emails_hr > 0 else 0,
-    axis=1
-)
+# Calculate backlog indicator
+daily['Backlog'] = daily['Received'] - daily['Handled']
+daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
 
 # Capacity bars (background)
 capacity_bars = alt.Chart(daily).mark_bar(
@@ -366,8 +369,8 @@ capacity_bars = alt.Chart(daily).mark_bar(
     ]
 )
 
-# Volume line (demand)
-volume_line = alt.Chart(daily).mark_line(
+# Received line (demand)
+received_line = alt.Chart(daily).mark_line(
     strokeWidth=3,
     color='#2563eb',
     point=alt.OverlayMarkDef(
@@ -377,15 +380,36 @@ volume_line = alt.Chart(daily).mark_line(
     )
 ).encode(
     x='Date:T',
-    y=alt.Y('Volume:Q', title='Email Volume'),
+    y=alt.Y('Received:Q', title='Email Volume'),
     tooltip=[
         alt.Tooltip('Date:T', format='%b %d, %Y'),
-        alt.Tooltip('Volume:Q', title='Emails')
+        alt.Tooltip('Received:Q', title='Emails Received'),
+        alt.Tooltip('Handled:Q', title='Emails Handled'),
+        alt.Tooltip('Backlog:Q', title='Daily Backlog')
+    ]
+)
+
+# Handled line (actual throughput) - dashed
+handled_line = alt.Chart(daily).mark_line(
+    strokeWidth=2,
+    color='#10b981',
+    strokeDash=[5, 5],
+    point=alt.OverlayMarkDef(
+        size=60,
+        filled=True,
+        color='#10b981'
+    )
+).encode(
+    x='Date:T',
+    y=alt.Y('Handled:Q'),
+    tooltip=[
+        alt.Tooltip('Date:T', format='%b %d, %Y'),
+        alt.Tooltip('Handled:Q', title='Emails Handled')
     ]
 )
 
 # Layer and configure
-daily_chart = alt.layer(capacity_bars, volume_line).resolve_scale(
+daily_chart = alt.layer(capacity_bars, received_line, handled_line).resolve_scale(
     y='independent'
 ).properties(
     height=400
@@ -403,29 +427,52 @@ daily_chart = alt.layer(capacity_bars, volume_line).resolve_scale(
 
 st.altair_chart(daily_chart, use_container_width=True)
 
-# Add capacity insight
-avg_capacity = daily['Capacity_Hours'].mean()
-avg_volume = daily['Volume'].mean()
+# Add legend
+st.markdown(
+    '<div style="display: flex; gap: 24px; margin-top: -8px; margin-bottom: 16px; font-size: 13px;">'
+    '<span style="color: #2563eb;">● Emails Received</span>'
+    '<span style="color: #10b981;">⚬ Emails Handled</span>'
+    '<span style="color: #cbd5e1;">▮ Agent Capacity (hours)</span>'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-if avg_capacity > 0:
-    capacity_vs_demand = (avg_volume / avg_capacity) / emails_hr * 100 if emails_hr > 0 else 0
+# Add capacity insight with proper logic
+avg_capacity = daily['Capacity_Hours'].mean()
+avg_received = daily['Received'].mean()
+avg_handled = daily['Handled'].mean()
+total_backlog = daily['Cumulative_Backlog'].iloc[-1]
+
+# Calculate theoretical handling capacity (hours * emails per hour)
+if avg_capacity > 0 and emails_hr > 0:
+    theoretical_capacity = avg_capacity * emails_hr  # How many emails we COULD handle
+    demand_vs_capacity_pct = (avg_received / theoretical_capacity) * 100
     
-    if capacity_vs_demand > 100:
+    # Key question: Are we keeping up with incoming emails?
+    if avg_received > avg_handled:
+        # Building backlog = understaffed
         status_color = "#ef4444"  # Red
-        status = "⚠️ **Overstaffed**"
-    elif capacity_vs_demand > 80:
+        status = "⚠️ **Understaffed**"
+        message = f"Receiving {avg_received:.0f} emails/day but only handling {avg_handled:.0f}. Backlog growing by {avg_received - avg_handled:.0f}/day."
+    elif demand_vs_capacity_pct > 90:
+        # Keeping up but very tight margins
         status_color = "#f59e0b"  # Amber
         status = "⚡ **Near Capacity**"
+        message = f"Operating at {demand_vs_capacity_pct:.0f}% of theoretical capacity. Limited buffer for spikes."
     else:
+        # Healthy buffer
         status_color = "#10b981"  # Green
         status = "✓ **Healthy Capacity**"
+        message = f"Capacity buffer: {theoretical_capacity - avg_received:.0f} emails/day available"
     
     st.markdown(
         f'<div style="padding: 16px; background: {status_color}15; border-left: 4px solid {status_color}; '
         f'border-radius: 8px; margin-top: 16px;">'
         f'<p style="margin: 0; font-size: 14px; font-weight: 600; color: {status_color};">{status}</p>'
-        f'<p style="margin: 4px 0 0 0; font-size: 13px; color: #64748b;">'
-        f'Average daily capacity: {avg_capacity:.1f} hours | Average volume: {avg_volume:.0f} emails'
+        f'<p style="margin: 4px 0 0 0; font-size: 13px; color: #64748b;">{message}</p>'
+        f'<p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">'
+        f'Theoretical capacity: {avg_capacity:.1f} hrs/day × {emails_hr:.1f} emails/hr = {theoretical_capacity:.0f} emails | '
+        f'Cumulative backlog: {total_backlog:+.0f} emails'
         f'</p></div>',
         unsafe_allow_html=True
     )

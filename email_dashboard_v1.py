@@ -325,6 +325,25 @@ available_sec = sum_seconds(intervals)
 
 
 # =====================================================
+# CALCULATE DAILY CAPACITY
+# =====================================================
+
+def get_daily_capacity(date):
+    """Get available agent hours for a single day"""
+    d_start = pd.Timestamp(date)
+    d_end   = d_start + pd.Timedelta(days=1)
+    
+    day_intervals = [
+        x for x in (
+            clip(s, e, d_start, d_end)
+            for s, e in zip(pres_filtered["Start DT"], pres_filtered["End DT"])
+        ) if x
+    ]
+    
+    return sum_seconds(day_intervals) / 3600  # Convert to hours
+
+
+# =====================================================
 # METRICS
 # =====================================================
 
@@ -366,11 +385,11 @@ c6.metric("Emails / Hour", f"{emails_hr:.1f}")
 
 
 # =====================================================
-# DAILY VOLUME VS  CHART
+# DAILY VOLUME VS CAPACITY CHART
 # =====================================================
 
 st.markdown("---")
-st.subheader("Daily Volume vs Agent ")
+st.subheader("Daily Volume vs Agent Capacity")
 
 # Prepare daily data - EMAILS HANDLED
 daily_handled = items_filtered.groupby("Date").size().reset_index(name="Handled")
@@ -378,8 +397,15 @@ daily_handled = items_filtered.groupby("Date").size().reset_index(name="Handled"
 # Prepare daily data - EMAILS RECEIVED (from ART)
 daily_received = art_filtered.groupby("Date").size().reset_index(name="Received")
 
+# Get capacity for each day
+date_range = pd.date_range(start, end, freq='D')
+daily_capacity = pd.DataFrame({
+    'Date': [d.date() for d in date_range],
+    'Capacity_Hours': [get_daily_capacity(d.date()) for d in date_range]
+})
+
 # Merge all metrics
-daily = daily_.merge(daily_handled, on='Date', how='left')
+daily = daily_capacity.merge(daily_handled, on='Date', how='left')
 daily = daily.merge(daily_received, on='Date', how='left')
 daily['Handled'] = daily['Handled'].fillna(0)
 daily['Received'] = daily['Received'].fillna(0)
@@ -392,16 +418,16 @@ daily['DateFull'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d, %Y')
 daily['Backlog'] = daily['Received'] - daily['Handled']
 daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
 
-#  bars (solid background showing agent hours) - LEFT Y-AXIS
-_bars = alt.Chart(daily).mark_bar(
+# Capacity bars (solid background showing agent hours) - LEFT Y-AXIS
+capacity_bars = alt.Chart(daily).mark_bar(
     color='#94a3b8',
     opacity=0.25
 ).encode(
     x=alt.X('DateStr:N', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b'), sort=None),
-    y=alt.Y('_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
+    y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
         alt.Tooltip('DateFull:N', title='Date'),
-        alt.Tooltip('_Hours:Q', title='Agent Hours', format='.1f')
+        alt.Tooltip('Capacity_Hours:Q', title='Agent Hours', format='.1f')
     ]
 )
 
@@ -444,11 +470,11 @@ handled_line = alt.Chart(daily).mark_line(
     ]
 )
 
-# Layer:  on left axis, both email metrics on shared right axis
+# Layer: capacity on left axis, both email metrics on shared right axis
 email_lines = alt.layer(received_line, handled_line).resolve_scale(y='shared')
 
 daily_chart = alt.layer(
-    _bars,
+    capacity_bars,
     email_lines
 ).resolve_scale(
     y='independent'
@@ -469,6 +495,47 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True
 )
+
+# Add capacity insight with proper logic
+avg_capacity = daily['Capacity_Hours'].mean()
+avg_received = daily['Received'].mean()
+avg_handled = daily['Handled'].mean()
+total_backlog = daily['Cumulative_Backlog'].iloc[-1] if len(daily) > 0 else 0
+
+# Calculate theoretical handling capacity (hours * emails per hour)
+if avg_capacity > 0 and emails_hr > 0:
+    theoretical_capacity = avg_capacity * emails_hr  # How many emails we COULD handle
+    demand_vs_capacity_pct = (avg_received / theoretical_capacity) * 100
+    
+    # Key question: Are we keeping up with incoming emails?
+    if avg_received > avg_handled:
+        # Building backlog = understaffed
+        status_color = "#ef4444"  # Red
+        status = "⚠️ **Understaffed**"
+        message = f"Receiving {avg_received:.0f} emails/day but only handling {avg_handled:.0f}. Backlog growing by {avg_received - avg_handled:.0f}/day."
+    elif demand_vs_capacity_pct > 90:
+        # Keeping up but very tight margins
+        status_color = "#f59e0b"  # Amber
+        status = "⚡ **Near Capacity**"
+        message = f"Operating at {demand_vs_capacity_pct:.0f}% of theoretical capacity. Limited buffer for spikes."
+    else:
+        # Healthy buffer
+        status_color = "#10b981"  # Green
+        status = "✓ **Healthy Capacity**"
+        message = f"Capacity buffer: {theoretical_capacity - avg_received:.0f} emails/day available"
+    
+    st.markdown(
+        f'<div style="padding: 16px; background: {status_color}15; border-left: 4px solid {status_color}; '
+        f'border-radius: 8px; margin-top: 16px;">'
+        f'<p style="margin: 0; font-size: 14px; font-weight: 600; color: {status_color};">{status}</p>'
+        f'<p style="margin: 4px 0 0 0; font-size: 13px; color: #64748b;">{message}</p>'
+        f'<p style="margin: 4px 0 0 0; font-size: 12px; color: #94a3b8;">'
+        f'Theoretical capacity: {avg_capacity:.1f} hrs/day × {emails_hr:.1f} emails/hr = {theoretical_capacity:.0f} emails | '
+        f'Cumulative backlog: {total_backlog:+.0f} emails'
+        f'</p></div>',
+        unsafe_allow_html=True
+    )
+
 
 # =====================================================
 # RESPONSE TIME TREND
@@ -571,6 +638,3 @@ if 'case_id_column' in locals() and case_id_column != "None (disabled)":
             hide_index=True,
             use_container_width=True
         )
-
-
-

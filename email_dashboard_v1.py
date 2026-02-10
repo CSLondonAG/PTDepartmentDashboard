@@ -19,13 +19,14 @@ AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# SAFE LOAD
+# SAFE CSV LOADER (cannot crash)
 # =====================================================
 
 def read_csv_safe(path):
     if not path.exists():
         st.error(f"{path.name} missing from project folder.")
         st.stop()
+
     try:
         return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except:
@@ -50,7 +51,7 @@ resp["CaseID"] = resp["Case ID"].astype(str)
 resp["OpenedDT"] = pd.to_datetime(resp["Date/Time Opened"], errors="coerce", dayfirst=True)
 resp["ReplyDT"]  = pd.to_datetime(resp["Email Message Date"], errors="coerce", dayfirst=True)
 
-# remove reopened / multi-touch
+# remove reopened/multi-touch
 resp = resp.groupby("CaseID").filter(lambda x: len(x) == 1)
 
 resp["ARTsec"] = (resp["ReplyDT"] - resp["OpenedDT"]).dt.total_seconds()
@@ -59,7 +60,7 @@ resp["Date"]   = resp["ReplyDT"].dt.date
 
 # =====================================================
 # ===================== AHT ===========================
-# from ItemsPT only
+# From ItemsPT
 # =====================================================
 
 items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
@@ -95,7 +96,7 @@ def sum_seconds(iv):
 
 
 # =====================================================
-# DATE RANGE (single source of truth)
+# DATE RANGE (single truth for ALL data)
 # =====================================================
 
 min_d = resp["Date"].min()
@@ -106,7 +107,6 @@ start, end = st.date_input(
     value=(max_d - pd.Timedelta(days=6), max_d)
 )
 
-# filter ALL datasets to SAME window
 resp  = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
 items = items[(items["Date"] >= start) & (items["Date"] <= end)]
 
@@ -115,7 +115,7 @@ end_ts   = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
 # =====================================================
-# AVAILABLE HOURS (presence filtered to same window)
+# AVAILABLE HOURS
 # =====================================================
 
 intervals = [
@@ -128,7 +128,7 @@ available_hours = available_sec / 3600
 
 
 # =====================================================
-# HANDLE TIME (same window — CRITICAL FIX)
+# HANDLE TIME (same window — FIXED)
 # =====================================================
 
 total_handle = items["HandleSec"].sum()
@@ -172,21 +172,51 @@ c5.metric("Utilisation", f"{util:.1%}")
 
 
 # =====================================================
-# DAILY REPLIES CHART
+# DAILY DEMAND vs CAPACITY CHART
 # =====================================================
 
 st.markdown("---")
-st.subheader("Daily Replies")
+st.subheader("Daily Demand vs Available Hours")
 
 daily = resp.groupby("Date").size().reset_index(name="Replies")
 
-chart = alt.Chart(daily).mark_bar(
+
+def hours_for_day(day):
+    d_start = pd.Timestamp(day)
+    d_end   = d_start + pd.Timedelta(days=1)
+
+    iv = [
+        clip(s, e, d_start, d_end)
+        for s, e in zip(pres["Start DT"], pres["End DT"])
+    ]
+    iv = [x for x in iv if x]
+
+    return sum_seconds(iv) / 3600
+
+
+daily["AvailableHours"] = daily["Date"].apply(hours_for_day)
+
+# force pure date
+daily["Date"] = pd.to_datetime(daily["Date"]).dt.date
+
+# demand bars
+bars = alt.Chart(daily).mark_bar(
     color="#2563eb",
     opacity=0.6
 ).encode(
-    x="Date:T",
-    y="Replies:Q",
-    tooltip=["Date:T", "Replies:Q"]
+    x=alt.X("Date:O", title="Date"),
+    y=alt.Y("Replies:Q", title="Replies")
 )
+
+# capacity bars
+hours = alt.Chart(daily).mark_bar(
+    color="#cbd5e1",
+    opacity=0.4
+).encode(
+    x="Date:O",
+    y=alt.Y("AvailableHours:Q", title="Available Hours")
+)
+
+chart = alt.layer(bars, hours).resolve_scale(y="independent")
 
 st.altair_chart(chart, use_container_width=True)

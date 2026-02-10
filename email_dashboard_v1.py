@@ -3,74 +3,45 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
+# =====================================================
+# CONFIG
+# =====================================================
+
 st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
 
-RESP_FILE = "Responded PT.csv"
-PRES_FILE = "PresencePT.csv"
+RESP_FILE  = "Responded PT.csv"
+ITEMS_FILE = "ItemsPT.csv"
+PRES_FILE  = "PresencePT.csv"
 
+EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# LOAD
+# IO
 # =====================================================
 
-def read_csv_safe(path):
+def read_csv_safe(path: Path) -> pd.DataFrame:
     try:
         return pd.read_csv(path, encoding="cp1252", low_memory=False)
-    except:
+    except Exception:
         return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
 
 
-resp = read_csv_safe(BASE / RESP_FILE)
-pres = read_csv_safe(BASE / PRES_FILE)
-
-resp.columns = resp.columns.str.strip()
-pres.columns = pres.columns.str.strip()
-
-
-# =====================================================
-# REMOVE REOPENED / MULTI-TOUCH CASES  (KEY STEP)
-# =====================================================
-
-if "Case Number" in resp.columns:
-    resp = resp.groupby("Case Number").filter(lambda x: len(x) == 1)
-
-
-# =====================================================
-# TIMESTAMPS
-# =====================================================
-
-resp["OpenedDT"] = pd.to_datetime(
-    resp["Date/Time Opened"],
-    errors="coerce",
-    dayfirst=True
-)
-
-resp["ClosedDT"] = pd.to_datetime(
-    resp["Date/Time Closed"],
-    errors="coerce",
-    dayfirst=True
-)
-
-# lifecycle time (since no inbound timestamp exists)
-resp["ResolutionSec"] = (resp["ClosedDT"] - resp["OpenedDT"]).dt.total_seconds()
-
-resp["HandleSec"] = pd.to_numeric(resp["Handle Time"], errors="coerce")
-
-resp["Date"] = resp["ClosedDT"].dt.date
-
-
-# =====================================================
-# PRESENCE
-# =====================================================
-
-pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
-pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
-
-pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
+def to_bool(x):
+    # Handles True/False, "TRUE"/"FALSE", "Yes"/"No", 1/0
+    if pd.isna(x):
+        return pd.NA
+    if isinstance(x, bool):
+        return x
+    s = str(x).strip().lower()
+    if s in {"true", "t", "yes", "y", "1"}:
+        return True
+    if s in {"false", "f", "no", "n", "0"}:
+        return False
+    return pd.NA
 
 
 # =====================================================
@@ -87,46 +58,159 @@ def fmt_mmss(sec):
 def fmt_hm(sec):
     if pd.isna(sec):
         return "—"
-    h = int(sec) // 3600
-    m = (int(sec) % 3600) // 60
+    sec = int(sec)
+    h = sec // 3600
+    m = (sec % 3600) // 60
     return f"{h}h {m:02}m"
 
 
 # =====================================================
-# DATE RANGE
+# HELPERS
 # =====================================================
 
-min_d = resp["Date"].min()
-max_d = resp["Date"].max()
+def clip(s, e, ws, we):
+    if pd.isna(s) or pd.isna(e):
+        return None
+    s2, e2 = max(s, ws), min(e, we)
+    return (s2, e2) if e2 > s2 else None
 
-start, end = st.date_input(
-    "Date Range",
-    value=(max_d - pd.Timedelta(days=6), max_d)
+
+def sum_seconds(intervals):
+    total = 0.0
+    for iv in intervals:
+        if not iv:
+            continue
+        s, e = iv
+        total += (e - s).total_seconds()
+    return total
+
+
+# =====================================================
+# LOAD
+# =====================================================
+
+resp  = read_csv_safe(BASE / RESP_FILE)
+items = read_csv_safe(BASE / ITEMS_FILE)
+pres  = read_csv_safe(BASE / PRES_FILE)
+
+for df in (resp, items, pres):
+    df.columns = df.columns.str.strip()
+
+# =====================================================
+# RESPONDED PT (ART)
+# =====================================================
+
+# Required columns (confirmed by your file screenshots + prior listing):
+# Case ID, Date/Time Opened, Email Message Date, Is Incoming, Date/Time Closed
+resp["CaseID"] = resp["Case ID"].astype(str).str.strip()
+
+resp["OpenedDT"] = pd.to_datetime(resp["Date/Time Opened"], errors="coerce", dayfirst=True)
+resp["EmailDT"]  = pd.to_datetime(resp["Email Message Date"], errors="coerce", dayfirst=True)
+
+# Agent replied = outbound email message
+resp["IsIncomingBool"] = resp["Is Incoming"].apply(to_bool)
+
+# Keep outbound rows for ART (agent replies)
+agent_msgs = resp[resp["IsIncomingBool"] == False].copy()
+
+# If the export is missing/dirty Is Incoming and yields no outbound rows, fall back to "all rows are agent messages"
+if agent_msgs.empty:
+    agent_msgs = resp.copy()
+
+# Per-reply lag from OpenedDT (captures multi-response)
+agent_msgs["ReplyLagSec"] = (agent_msgs["EmailDT"] - agent_msgs["OpenedDT"]).dt.total_seconds()
+
+# Per-case first response time (FRT)
+first_reply = (
+    agent_msgs.dropna(subset=["OpenedDT", "EmailDT"])
+    .groupby("CaseID", as_index=False)
+    .agg(
+        OpenedDT=("OpenedDT", "min"),
+        FirstReplyDT=("EmailDT", "min"),
+        Replies=("EmailDT", "count"),
+        AvgReplyLagSec=("ReplyLagSec", "mean"),
+    )
+)
+first_reply["FRTSec"] = (first_reply["FirstReplyDT"] - first_reply["OpenedDT"]).dt.total_seconds()
+first_reply["OpenedDate"] = first_reply["OpenedDT"].dt.date
+
+
+# =====================================================
+# ITEMS PT (AHT)
+# =====================================================
+
+items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
+
+items["CaseID"] = items["Work Item: Name"].astype(str).str.strip()
+
+items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
+
+items["AssignDT"] = pd.to_datetime(
+    items["Assign Date"].astype(str) + " " + items["Assign Time"].astype(str),
+    errors="coerce",
+    dayfirst=True
+)
+items["AssignDate"] = items["AssignDT"].dt.date
+
+# Handle time at case level (sums multi-assignments; mean handle per assignment also available)
+handle_by_case = (
+    items.groupby("CaseID", as_index=False)
+    .agg(
+        TotalHandleSec=("HandleSec", "sum"),
+        AvgHandleSec=("HandleSec", "mean"),
+        AssignDT=("AssignDT", "min"),
+    )
 )
 
-resp = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
+
+# =====================================================
+# JOIN (case metrics)
+# =====================================================
+
+case = first_reply.merge(handle_by_case, on="CaseID", how="left")
+
+# =====================================================
+# PRESENCE (capacity)
+# =====================================================
+
+pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
+pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
+pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
+
+
+# =====================================================
+# DATE RANGE (use OpenedDate = when the case entered the system)
+# =====================================================
+
+all_dates = pd.Series(case["OpenedDate"]).dropna()
+if all_dates.empty:
+    st.error("No valid dates found in Responded PT.csv after parsing.")
+    st.stop()
+
+min_d = all_dates.min()
+max_d = all_dates.max()
+
+start, end = st.date_input("Date Range", value=(max_d - pd.Timedelta(days=6), max_d))
+
+case_f = case[(case["OpenedDate"] >= start) & (case["OpenedDate"] <= end)].copy()
+agent_msgs_f = agent_msgs[
+    (agent_msgs["OpenedDT"].dt.date >= start) &
+    (agent_msgs["OpenedDT"].dt.date <= end)
+].copy()
 
 start_ts = pd.Timestamp(start)
 end_ts   = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
 # =====================================================
-# CAPACITY
+# CAPACITY CALC (in selected range)
 # =====================================================
 
-def clip(s,e,ws,we):
-    s2,e2=max(s,ws),min(e,we)
-    return (s2,e2) if e2>s2 else None
-
-def sum_seconds(iv):
-    return sum((e-s).total_seconds() for s,e in iv if iv)
-
 intervals = [
-    clip(s,e,start_ts,end_ts)
-    for s,e in zip(pres["Start DT"], pres["End DT"])
+    clip(s, e, start_ts, end_ts)
+    for s, e in zip(pres["Start DT"], pres["End DT"])
 ]
 intervals = [x for x in intervals if x]
-
 available_sec = sum_seconds(intervals)
 
 
@@ -134,32 +218,45 @@ available_sec = sum_seconds(intervals)
 # METRICS
 # =====================================================
 
-avg_aht = resp["HandleSec"].mean()
-avg_res = resp["ResolutionSec"].mean()
+avg_frt = case_f["FRTSec"].mean()
+avg_reply_lag = agent_msgs_f["ReplyLagSec"].mean()  # multi-response aware
+avg_aht = case_f["AvgHandleSec"].mean()             # effort per assignment (average)
+total_handle = case_f["TotalHandleSec"].sum()
 
-util = resp["HandleSec"].sum() / available_sec if available_sec else 0
+util = (total_handle / available_sec) if available_sec else 0
 
-st.title("Email Department Performance (First-Pass Only)")
+# =====================================================
+# UI
+# =====================================================
 
-c1,c2,c3,c4 = st.columns(4)
+st.title("Email Department Performance")
 
-c1.metric("Cases Handled", f"{len(resp):,}")
-c2.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
-c3.metric("Avg Resolution Time", fmt_hm(avg_res))
-c4.metric("Utilisation", f"{util:.1%}")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Cases (Opened)", f"{len(case_f):,}")
+c2.metric("Replies (Agent)", f"{len(agent_msgs_f):,}")
+c3.metric("Avg First Response (Opened → 1st Reply)", fmt_hm(avg_frt))
+c4.metric("Avg Reply Lag (Opened → Each Reply)", fmt_hm(avg_reply_lag))
+c5.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
+
+c6, c7 = st.columns(2)
+c6.metric("Total Handle Time", fmt_hm(total_handle))
+c7.metric("Utilisation", f"{util:.1%}")
 
 
 # =====================================================
-# DAILY VOLUME
+# DAILY VOLUME (agent replies)
 # =====================================================
 
 st.markdown("---")
+st.subheader("Daily Agent Replies")
 
-daily = resp.groupby("Date").size().reset_index(name="Cases")
+agent_msgs_f["ReplyDate"] = agent_msgs_f["EmailDT"].dt.date
+daily_replies = agent_msgs_f.groupby("ReplyDate").size().reset_index(name="Replies")
 
-chart = alt.Chart(daily).mark_bar(color="#2563eb", opacity=0.6).encode(
-    x="Date:T",
-    y="Cases:Q"
+chart = alt.Chart(daily_replies).mark_bar(opacity=0.6, color="#2563eb").encode(
+    x=alt.X("ReplyDate:T", title=""),
+    y=alt.Y("Replies:Q", title="Replies"),
+    tooltip=["ReplyDate:T", "Replies:Q"]
 )
 
 st.altair_chart(chart, use_container_width=True)

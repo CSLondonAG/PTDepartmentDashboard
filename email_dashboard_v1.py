@@ -3,17 +3,13 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
-# =====================================================
-# CONFIG
-# =====================================================
-
 st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
 
 ITEMS_FILE = "ItemsPT.csv"
 PRES_FILE  = "PresencePT.csv"
-ART_FILE   = "ART PT.csv"   # ← NEW (true response times)
+ART_FILE   = "ART PT.csv"
 
 EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
@@ -31,6 +27,19 @@ def read_csv_safe(path):
 
 
 # =====================================================
+# AUTO COLUMN DETECTION (CRITICAL FIX)
+# =====================================================
+
+def find_col(cols, keywords):
+    cols_lower = {c.lower(): c for c in cols}
+    for k in keywords:
+        for c_lower, orig in cols_lower.items():
+            if k in c_lower:
+                return orig
+    return None
+
+
+# =====================================================
 # LOAD
 # =====================================================
 
@@ -43,21 +52,6 @@ def load():
     for df in (items, pres, art):
         df.columns = df.columns.str.strip()
 
-    # ---- datetime coercion ----
-    for c in ["Start DT","End DT"]:
-        if c in pres:
-            pres[c] = pd.to_datetime(pres[c], errors="coerce", dayfirst=True)
-
-    for c in ["Assign Date","Assign Time"]:
-        if c in items:
-            items[c] = items[c].astype(str)
-
-    # ART file expected fields:
-    # Received DT + Resolved DT
-    for c in ["Received DT","Resolved DT"]:
-        if c in art:
-            art[c] = pd.to_datetime(art[c], errors="coerce", dayfirst=True)
-
     return items, pres, art
 
 
@@ -65,31 +59,41 @@ items, pres, art = load()
 
 
 # =====================================================
-# AHT (ItemsPT)
+# -------- AHT (ItemsPT)
 # =====================================================
 
-items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL]
+items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
 
 items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
 
-items["Assign DT"] = pd.to_datetime(
+assign_dt = pd.to_datetime(
     items["Assign Date"] + " " + items["Assign Time"],
     errors="coerce",
     dayfirst=True
 )
 
-items["Date"] = items["Assign DT"].dt.date
+items["Date"] = assign_dt.dt.date
 
 
 # =====================================================
-# RESPONSE TIME (ART PT)
+# -------- RESPONSE TIME (ART PT)  (SAFE)
 # =====================================================
 
-art["ResponseSec"] = (
-    art["Resolved DT"] - art["Received DT"]
-).dt.total_seconds()
+open_col = find_col(art.columns, ["opened", "received", "created"])
+close_col = find_col(art.columns, ["closed", "resolved", "completed"])
 
-art["Date"] = art["Received DT"].dt.date
+if open_col and close_col:
+
+    art[open_col] = pd.to_datetime(art[open_col], errors="coerce", dayfirst=True)
+    art[close_col] = pd.to_datetime(art[close_col], errors="coerce", dayfirst=True)
+
+    art["ResponseSec"] = (art[close_col] - art[open_col]).dt.total_seconds()
+    art["Date"] = art[open_col].dt.date
+
+else:
+    art["ResponseSec"] = pd.NA
+    art["Date"] = pd.NaT
+    st.warning("ART PT.csv does not contain recognizable opened/resolved timestamp columns.")
 
 
 # =====================================================
@@ -104,23 +108,26 @@ start, end = st.date_input(
     value=(max_d - pd.Timedelta(days=6), max_d)
 )
 
-ws = pd.Timestamp(start)
-we = pd.Timestamp(end) + pd.Timedelta(days=1)
-
-items = items[(items["Date"]>=start)&(items["Date"]<=end)]
-art   = art[(art["Date"]>=start)&(art["Date"]<=end)]
+items = items[(items["Date"] >= start) & (items["Date"] <= end)]
+art   = art[(art["Date"] >= start) & (art["Date"] <= end)]
 
 
 # =====================================================
-# CAPACITY (Presence)
+# PRESENCE → CAPACITY
 # =====================================================
 
 def clip(s,e,ws,we):
-    s2,e2 = max(s,ws), min(e,we)
+    s2,e2=max(s,ws),min(e,we)
     return (s2,e2) if e2>s2 else None
 
 def sum_sec(iv):
     return sum((e-s).total_seconds() for s,e in iv)
+
+pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
+pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
+
+ws = pd.Timestamp(start)
+we = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
 
@@ -139,10 +146,10 @@ available_sec = sum_sec(intervals)
 # =====================================================
 
 avg_aht = items["HandleSec"].mean()
-avg_response = art["ResponseSec"].mean()
+avg_resp = art["ResponseSec"].mean()
 
 util = items["HandleSec"].sum() / available_sec if available_sec else 0
-emails_hr = len(items) / (available_sec/3600) if available_sec else 0
+emails_hr = len(items)/(available_sec/3600) if available_sec else 0
 
 def fmt(sec):
     if pd.isna(sec): return "—"
@@ -155,7 +162,7 @@ c1,c2,c3,c4,c5 = st.columns(5)
 
 c1.metric("Total Emails", f"{len(items):,}")
 c2.metric("Avg Handle Time", fmt(avg_aht))
-c3.metric("Avg Response Time", fmt(avg_response))
+c3.metric("Avg Response Time", fmt(avg_resp))
 c4.metric("Utilisation", f"{util:.1%}")
 c5.metric("Emails / Available Hr", f"{emails_hr:.1f}")
 

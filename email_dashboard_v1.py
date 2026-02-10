@@ -3,7 +3,15 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
+# =====================================================
+# PAGE
+# =====================================================
+
 st.set_page_config(layout="wide")
+
+# =====================================================
+# FILES
+# =====================================================
 
 BASE = Path(__file__).parent
 
@@ -27,14 +35,47 @@ def read_csv_safe(path):
 
 
 # =====================================================
-# AUTO COLUMN DETECTION (CRITICAL FIX)
+# HELPERS
 # =====================================================
 
+def fmt(sec):
+    if sec is None or pd.isna(sec):
+        return "—"
+    m, s = divmod(int(sec), 60)
+    return f"{m:02}:{s:02}"
+
+
+def clip(s, e, ws, we):
+    if pd.isna(s) or pd.isna(e):
+        return None
+    s2, e2 = max(s, ws), min(e, we)
+    return (s2, e2) if e2 > s2 else None
+
+
+def sum_seconds(intervals):
+    total = 0
+    for iv in intervals:
+        if iv:
+            s, e = iv
+            total += (e - s).total_seconds()
+    return total
+
+
+def safe_min(series):
+    s = series.dropna()
+    return s.min() if len(s) else None
+
+
+def safe_max(series):
+    s = series.dropna()
+    return s.max() if len(s) else None
+
+
 def find_col(cols, keywords):
-    cols_lower = {c.lower(): c for c in cols}
+    lower = {c.lower(): c for c in cols}
     for k in keywords:
-        for c_lower, orig in cols_lower.items():
-            if k in c_lower:
+        for lc, orig in lower.items():
+            if k in lc:
                 return orig
     return None
 
@@ -59,15 +100,15 @@ items, pres, art = load()
 
 
 # =====================================================
-# -------- AHT (ItemsPT)
+# AHT (ItemsPT)
 # =====================================================
 
 items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
 
-items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
+items["HandleSec"] = pd.to_numeric(items.get("Handle Time"), errors="coerce")
 
 assign_dt = pd.to_datetime(
-    items["Assign Date"] + " " + items["Assign Time"],
+    items.get("Assign Date", "").astype(str) + " " + items.get("Assign Time", "").astype(str),
     errors="coerce",
     dayfirst=True
 )
@@ -76,37 +117,47 @@ items["Date"] = assign_dt.dt.date
 
 
 # =====================================================
-# -------- RESPONSE TIME (ART PT)  (SAFE)
+# RESPONSE TIME (ART PT)
 # =====================================================
 
-open_col = find_col(art.columns, ["opened", "received", "created"])
+open_col  = find_col(art.columns, ["opened", "received", "created"])
 close_col = find_col(art.columns, ["closed", "resolved", "completed"])
 
 if open_col and close_col:
-
-    art[open_col] = pd.to_datetime(art[open_col], errors="coerce", dayfirst=True)
+    art[open_col]  = pd.to_datetime(art[open_col], errors="coerce", dayfirst=True)
     art[close_col] = pd.to_datetime(art[close_col], errors="coerce", dayfirst=True)
-
     art["ResponseSec"] = (art[close_col] - art[open_col]).dt.total_seconds()
     art["Date"] = art[open_col].dt.date
-
 else:
     art["ResponseSec"] = pd.NA
     art["Date"] = pd.NaT
-    st.warning("ART PT.csv does not contain recognizable opened/resolved timestamp columns.")
 
 
 # =====================================================
-# DATE RANGE
+# DATE RANGE (NaT-safe)
 # =====================================================
 
-min_d = min(items["Date"].min(), art["Date"].min())
-max_d = max(items["Date"].max(), art["Date"].max())
+min_candidates = [
+    safe_min(items["Date"]),
+    safe_min(art["Date"])
+]
 
-start, end = st.date_input(
-    "Date Range",
-    value=(max_d - pd.Timedelta(days=6), max_d)
-)
+max_candidates = [
+    safe_max(items["Date"]),
+    safe_max(art["Date"])
+]
+
+min_candidates = [x for x in min_candidates if x is not None]
+max_candidates = [x for x in max_candidates if x is not None]
+
+if not min_candidates:
+    st.error("No valid dates in dataset.")
+    st.stop()
+
+min_d = min(min_candidates)
+max_d = max(max_candidates)
+
+start, end = st.date_input("Date Range", value=(max_d - pd.Timedelta(days=6), max_d))
 
 items = items[(items["Date"] >= start) & (items["Date"] <= end)]
 art   = art[(art["Date"] >= start) & (art["Date"] <= end)]
@@ -116,15 +167,8 @@ art   = art[(art["Date"] >= start) & (art["Date"] <= end)]
 # PRESENCE → CAPACITY
 # =====================================================
 
-def clip(s,e,ws,we):
-    s2,e2=max(s,ws),min(e,we)
-    return (s2,e2) if e2>s2 else None
-
-def sum_sec(iv):
-    return sum((e-s).total_seconds() for s,e in iv)
-
-pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
-pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
+pres["Start DT"] = pd.to_datetime(pres.get("Start DT"), errors="coerce", dayfirst=True)
+pres["End DT"]   = pd.to_datetime(pres.get("End DT"), errors="coerce", dayfirst=True)
 
 ws = pd.Timestamp(start)
 we = pd.Timestamp(end) + pd.Timedelta(days=1)
@@ -133,12 +177,12 @@ pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATU
 
 intervals = [
     x for x in (
-        clip(s,e,ws,we)
-        for s,e in zip(pres["Start DT"], pres["End DT"])
+        clip(s, e, ws, we)
+        for s, e in zip(pres["Start DT"], pres["End DT"])
     ) if x
 ]
 
-available_sec = sum_sec(intervals)
+available_sec = sum_seconds(intervals)
 
 
 # =====================================================
@@ -146,23 +190,18 @@ available_sec = sum_sec(intervals)
 # =====================================================
 
 avg_aht = items["HandleSec"].mean()
-avg_resp = art["ResponseSec"].mean()
+avg_response = art["ResponseSec"].mean()
 
 util = items["HandleSec"].sum() / available_sec if available_sec else 0
-emails_hr = len(items)/(available_sec/3600) if available_sec else 0
-
-def fmt(sec):
-    if pd.isna(sec): return "—"
-    m,s = divmod(int(sec),60)
-    return f"{m:02}:{s:02}"
+emails_hr = len(items) / (available_sec / 3600) if available_sec else 0
 
 st.title("Email Department Performance")
 
-c1,c2,c3,c4,c5 = st.columns(5)
+c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("Total Emails", f"{len(items):,}")
-c2.metric("Avg Handle Time", fmt(avg_aht))
-c3.metric("Avg Response Time", fmt(avg_resp))
+c2.metric("Avg Handle Time (AHT)", fmt(avg_aht))
+c3.metric("Avg Response Time", fmt(avg_response))
 c4.metric("Utilisation", f"{util:.1%}")
 c5.metric("Emails / Available Hr", f"{emails_hr:.1f}")
 
@@ -178,21 +217,18 @@ daily_resp  = art.groupby("Date")["ResponseSec"].mean().reset_index(name="Respon
 
 daily = daily_items.merge(daily_resp, on="Date", how="left")
 
-bars = alt.Chart(daily).mark_bar(opacity=0.15, color="#cbd5e1").encode(
-    x="Date:T",
-    y="Volume:Q"
-)
+if daily.empty:
+    st.info("No data for selected period.")
+    st.stop()
 
-line = alt.Chart(daily).mark_line(
-    strokeWidth=2.5,
-    color="#2563eb",
-    point=True
-).encode(
+bars = alt.Chart(daily).mark_bar(opacity=0.15).encode(x="Date:T", y="Volume:Q")
+
+line = alt.Chart(daily).mark_line(strokeWidth=2.5, point=True).encode(
     x="Date:T",
     y="Response:Q"
 )
 
 st.altair_chart(
-    alt.layer(bars,line).resolve_scale(y="independent"),
+    alt.layer(bars, line).resolve_scale(y="independent"),
     use_container_width=True
 )

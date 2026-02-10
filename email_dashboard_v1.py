@@ -3,10 +3,6 @@ import pandas as pd
 import altair as alt
 from pathlib import Path
 
-# =====================================================
-# CONFIG
-# =====================================================
-
 st.set_page_config(layout="wide")
 
 BASE = Path(__file__).parent
@@ -18,7 +14,7 @@ AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
 # =====================================================
-# SAFE CSV
+# LOAD
 # =====================================================
 
 def read_csv_safe(path):
@@ -26,6 +22,55 @@ def read_csv_safe(path):
         return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except:
         return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
+
+
+resp = read_csv_safe(BASE / RESP_FILE)
+pres = read_csv_safe(BASE / PRES_FILE)
+
+resp.columns = resp.columns.str.strip()
+pres.columns = pres.columns.str.strip()
+
+
+# =====================================================
+# REMOVE REOPENED / MULTI-TOUCH CASES  (KEY STEP)
+# =====================================================
+
+if "Case Number" in resp.columns:
+    resp = resp.groupby("Case Number").filter(lambda x: len(x) == 1)
+
+
+# =====================================================
+# TIMESTAMPS
+# =====================================================
+
+resp["OpenedDT"] = pd.to_datetime(
+    resp["Date/Time Opened"],
+    errors="coerce",
+    dayfirst=True
+)
+
+resp["ClosedDT"] = pd.to_datetime(
+    resp["Date/Time Closed"],
+    errors="coerce",
+    dayfirst=True
+)
+
+# lifecycle time (since no inbound timestamp exists)
+resp["ResolutionSec"] = (resp["ClosedDT"] - resp["OpenedDT"]).dt.total_seconds()
+
+resp["HandleSec"] = pd.to_numeric(resp["Handle Time"], errors="coerce")
+
+resp["Date"] = resp["ClosedDT"].dt.date
+
+
+# =====================================================
+# PRESENCE
+# =====================================================
+
+pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
+pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
+
+pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
 
 
 # =====================================================
@@ -42,48 +87,9 @@ def fmt_mmss(sec):
 def fmt_hm(sec):
     if pd.isna(sec):
         return "—"
-    sec = int(sec)
-    h = sec // 3600
-    m = (sec % 3600) // 60
+    h = int(sec) // 3600
+    m = (int(sec) % 3600) // 60
     return f"{h}h {m:02}m"
-
-
-# =====================================================
-# LOAD
-# =====================================================
-
-resp = read_csv_safe(BASE / RESP_FILE)
-pres = read_csv_safe(BASE / PRES_FILE)
-
-resp.columns = resp.columns.str.strip()
-pres.columns = pres.columns.str.strip()
-
-
-# =====================================================
-# EXPECTED COLUMNS IN Responded PT
-# (adjust names if slightly different)
-# =====================================================
-
-# timestamps
-resp["ReceivedDT"] = pd.to_datetime(resp["Date/Time Received"], errors="coerce", dayfirst=True)
-resp["RespondedDT"] = pd.to_datetime(resp["Date/Time Responded"], errors="coerce", dayfirst=True)
-
-# handle time already provided
-resp["HandleSec"] = pd.to_numeric(resp["Handle Time"], errors="coerce")
-
-resp["ResponseSec"] = (resp["RespondedDT"] - resp["ReceivedDT"]).dt.total_seconds()
-
-resp["Date"] = resp["RespondedDT"].dt.date
-
-
-# =====================================================
-# PRESENCE
-# =====================================================
-
-pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
-pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
-
-pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
 
 
 # =====================================================
@@ -128,34 +134,32 @@ available_sec = sum_seconds(intervals)
 # METRICS
 # =====================================================
 
-avg_aht  = resp["HandleSec"].mean()
-avg_resp = resp["ResponseSec"].mean()
+avg_aht = resp["HandleSec"].mean()
+avg_res = resp["ResolutionSec"].mean()
 
-emails_hr = len(resp) / (available_sec/3600) if available_sec else 0
 util = resp["HandleSec"].sum() / available_sec if available_sec else 0
 
-st.title("Email Department Performance")
+st.title("Email Department Performance (First-Pass Only)")
 
 c1,c2,c3,c4 = st.columns(4)
 
-c1.metric("Replies Handled", f"{len(resp):,}")
+c1.metric("Cases Handled", f"{len(resp):,}")
 c2.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
-c3.metric("Avg Response Time (ART)", fmt_hm(avg_resp))
+c3.metric("Avg Resolution Time", fmt_hm(avg_res))
 c4.metric("Utilisation", f"{util:.1%}")
 
 
 # =====================================================
-# DAILY VOLUME TREND
+# DAILY VOLUME
 # =====================================================
 
 st.markdown("---")
-st.subheader("Daily Replies")
 
-daily = resp.groupby("Date").size().reset_index(name="Replies")
+daily = resp.groupby("Date").size().reset_index(name="Cases")
 
 chart = alt.Chart(daily).mark_bar(color="#2563eb", opacity=0.6).encode(
     x="Date:T",
-    y="Replies:Q"
+    y="Cases:Q"
 )
 
 st.altair_chart(chart, use_container_width=True)

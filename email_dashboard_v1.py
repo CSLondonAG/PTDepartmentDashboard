@@ -360,7 +360,7 @@ daily['DateFull'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d, %Y')
 daily['Backlog'] = daily['Received'] - daily['Handled']
 daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
 
-# Capacity bars (solid background showing agent hours)
+# Capacity bars (solid background showing agent hours) - LEFT Y-AXIS
 capacity_bars = alt.Chart(daily).mark_bar(
     color='#94a3b8',
     opacity=0.25
@@ -373,7 +373,7 @@ capacity_bars = alt.Chart(daily).mark_bar(
     ]
 )
 
-# Emails Received line (demand - blue solid)
+# Emails Received line (demand - blue solid) - RIGHT Y-AXIS (shared with handled)
 received_line = alt.Chart(daily).mark_line(
     strokeWidth=3,
     color='#2563eb',
@@ -393,7 +393,7 @@ received_line = alt.Chart(daily).mark_line(
     ]
 )
 
-# Emails Handled line (throughput - green solid)
+# Emails Handled line (throughput - green solid) - RIGHT Y-AXIS (shared with received)
 handled_line = alt.Chart(daily).mark_line(
     strokeWidth=3,
     color='#10b981',
@@ -404,7 +404,7 @@ handled_line = alt.Chart(daily).mark_line(
     )
 ).encode(
     x=alt.X('DateStr:N', sort=None),
-    y=alt.Y('Handled:Q'),
+    y=alt.Y('Handled:Q', title=None),  # Share the same y-axis as received, no duplicate title
     tooltip=[
         alt.Tooltip('DateFull:N', title='Date'),
         alt.Tooltip('Handled:Q', title='Emails Handled'),
@@ -412,11 +412,12 @@ handled_line = alt.Chart(daily).mark_line(
     ]
 )
 
-# Layer with independent Y-axes
+# Layer: capacity on left axis, both email metrics on shared right axis
+email_lines = alt.layer(received_line, handled_line).resolve_scale(y='shared')
+
 daily_chart = alt.layer(
     capacity_bars,
-    received_line,
-    handled_line
+    email_lines
 ).resolve_scale(
     y='independent'
 ).properties(

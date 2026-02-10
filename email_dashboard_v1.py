@@ -227,9 +227,12 @@ pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True
 
 
 # =====================================================
-# DATE RANGE FILTER (SIDEBAR)
+# SIDEBAR FILTERS
 # =====================================================
 
+st.sidebar.header("Filters")
+
+# Date range
 all_dates = pd.concat([items["Date"].dropna(), art["Date"].dropna()])
 
 if all_dates.empty:
@@ -239,8 +242,6 @@ if all_dates.empty:
 min_d = all_dates.min()
 max_d = all_dates.max()
 
-st.sidebar.header("Filters")
-
 start, end = st.sidebar.date_input(
     "Date Range",
     value=(max_d - pd.Timedelta(days=6), max_d),
@@ -248,9 +249,60 @@ start, end = st.sidebar.date_input(
     max_value=max_d
 )
 
-# Filter datasets
+# Filter datasets by date first
 items_filtered = items[(items["Date"] >= start) & (items["Date"] <= end)].copy()
 art_filtered   = art[(art["Date"] >= start) & (art["Date"] <= end)].copy()
+
+# =====================================================
+# DETECT REOPENED EMAILS
+# =====================================================
+
+# Look for case/email ID columns
+case_id_candidates = [col for col in items.columns if any(
+    keyword in col.lower() 
+    for keyword in ['case', 'email', 'ticket', 'id', 'number', 'reference']
+)]
+
+st.sidebar.markdown("---")
+st.sidebar.header("Reopened Email Detection")
+
+# If we found potential ID columns, let user select
+if case_id_candidates:
+    case_id_column = st.sidebar.selectbox(
+        "Case/Email ID Column",
+        options=["None (disabled)"] + case_id_candidates,
+        help="Select the column that uniquely identifies each email/case"
+    )
+    
+    if case_id_column != "None (disabled)":
+        # Calculate reopen statistics on filtered data
+        case_counts = items_filtered.groupby(case_id_column).size()
+        reopened_cases = case_counts[case_counts > 1]
+        
+        items_filtered['IsReopened'] = items_filtered[case_id_column].isin(reopened_cases.index)
+        items_filtered['TouchCount'] = items_filtered[case_id_column].map(case_counts)
+        
+        # Show reopen stats in sidebar
+        st.sidebar.metric("Total Cases", items_filtered[case_id_column].nunique())
+        st.sidebar.metric("Reopened Cases", len(reopened_cases))
+        st.sidebar.metric("Reopen Rate", f"{(len(reopened_cases) / items_filtered[case_id_column].nunique() * 100):.1f}%")
+        
+        # Toggle to exclude reopens from metrics
+        exclude_reopens = st.sidebar.checkbox(
+            "Exclude reopens from AHT",
+            value=False,
+            help="Calculate AHT only from first-touch emails"
+        )
+        
+        if exclude_reopens:
+            st.sidebar.info(f"Excluding {items_filtered['IsReopened'].sum()} reopened handles from AHT calculation")
+    else:
+        exclude_reopens = False
+        items_filtered['IsReopened'] = False
+else:
+    st.sidebar.info("No case ID column detected. Cannot identify reopened emails.")
+    exclude_reopens = False
+    items_filtered['IsReopened'] = False
 
 start_ts = pd.Timestamp(start)
 end_ts   = pd.Timestamp(end) + pd.Timedelta(days=1)
@@ -295,7 +347,13 @@ def get_daily_capacity(date):
 # METRICS
 # =====================================================
 
-avg_aht  = items_filtered["HandleSec"].mean()
+# Calculate AHT with optional reopen exclusion
+if exclude_reopens:
+    aht_data = items_filtered[~items_filtered['IsReopened']]
+    avg_aht = aht_data["HandleSec"].mean()
+else:
+    avg_aht = items_filtered["HandleSec"].mean()
+
 avg_resp = art_filtered["ResponseSec"].mean()
 util = items_filtered["HandleSec"].sum() / available_sec if available_sec else 0
 emails_hr = len(items_filtered) / (available_sec / 3600) if available_sec else 0
@@ -522,3 +580,61 @@ response_chart = alt.Chart(daily_resp).mark_area(
 )
 
 st.altair_chart(response_chart, width='stretch')
+
+
+# =====================================================
+# REOPENED EMAILS ANALYSIS (if enabled)
+# =====================================================
+
+if 'case_id_column' in locals() and case_id_column != "None (disabled)":
+    st.markdown("---")
+    st.subheader("Reopened Email Analysis")
+    
+    # Create reopen breakdown by day
+    daily_reopens = items_filtered.groupby(['Date', 'IsReopened']).size().reset_index(name='Count')
+    daily_reopens['Type'] = daily_reopens['IsReopened'].map({True: 'Reopened', False: 'First Touch'})
+    daily_reopens['DateStr'] = pd.to_datetime(daily_reopens['Date']).dt.strftime('%b %d')
+    
+    # Stacked bar chart
+    reopen_chart = alt.Chart(daily_reopens).mark_bar().encode(
+        x=alt.X('DateStr:N', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b'), sort=None),
+        y=alt.Y('Count:Q', title='Handle Events', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
+        color=alt.Color(
+            'Type:N',
+            scale=alt.Scale(
+                domain=['First Touch', 'Reopened'],
+                range=['#10b981', '#ef4444']
+            ),
+            legend=alt.Legend(title=None, orient='top', labelFontSize=13)
+        ),
+        tooltip=[
+            alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+            alt.Tooltip('Type:N', title='Type'),
+            alt.Tooltip('Count:Q', title='Handles')
+        ]
+    ).properties(
+        height=250
+    ).configure_axis(
+        gridOpacity=0.08,
+        domainOpacity=0.2
+    ).configure_view(
+        strokeWidth=0
+    )
+    
+    st.altair_chart(reopen_chart, width='stretch')
+    
+    # Show top reopened cases
+    if len(reopened_cases) > 0:
+        st.markdown("##### Most Reopened Cases")
+        top_reopens = case_counts.sort_values(ascending=False).head(10).reset_index()
+        top_reopens.columns = ['Case ID', 'Times Handled']
+        
+        # Calculate total handle time per case
+        total_time_per_case = items_filtered.groupby(case_id_column)['HandleSec'].sum()
+        top_reopens['Total Handle Time'] = top_reopens['Case ID'].map(total_time_per_case).apply(fmt_mmss)
+        
+        st.dataframe(
+            top_reopens,
+            hide_index=True,
+            use_container_width=True
+        )

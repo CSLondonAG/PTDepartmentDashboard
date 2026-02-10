@@ -163,4 +163,43 @@ c1,c2,c3,c4,c5 = st.columns(5)
 c1.metric("Replies", len(resp))
 c2.metric("Avg Response Time (ART)", fmt_hm(resp["ARTsec"].mean()))
 c3.metric("Avg Handle Time (AHT)", fmt_mmss(avg_aht))
-c4.metric("Available Hours
+c4.metric("Available Hours", f"{available_hours:.1f}")
+c5.metric("Utilisation", f"{util:.1%}")
+
+
+# =====================================================
+# DAILY DEMAND VS CAPACITY CHART
+# =====================================================
+
+st.markdown("---")
+st.subheader("Daily Demand vs Available Hours")
+
+daily = resp.groupby("Date").size().reset_index(name="Replies")
+
+
+def hours_for_day(day):
+    ds = pd.Timestamp(day)
+    de = ds + pd.Timedelta(days=1)
+
+    iv = [clip(s, e, ds, de) for s, e in zip(pres["Start DT"], pres["End DT"])]
+    iv = [x for x in iv if x]
+
+    return sum_seconds(iv) / 3600
+
+
+daily["AvailableHours"] = daily["Date"].apply(hours_for_day)
+
+bars = alt.Chart(daily).mark_bar(color="#2563eb", opacity=0.6).encode(
+    x=alt.X("Date:O", title="Date"),
+    y="Replies:Q"
+)
+
+hours = alt.Chart(daily).mark_bar(color="#cbd5e1", opacity=0.4).encode(
+    x="Date:O",
+    y="AvailableHours:Q"
+)
+
+st.altair_chart(
+    alt.layer(bars, hours).resolve_scale(y="independent"),
+    use_container_width=True
+)

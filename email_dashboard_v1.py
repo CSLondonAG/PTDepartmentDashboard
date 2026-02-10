@@ -352,6 +352,10 @@ daily = daily.merge(daily_received, on='Date', how='left')
 daily['Handled'] = daily['Handled'].fillna(0)
 daily['Received'] = daily['Received'].fillna(0)
 
+# Convert Date to string for ordinal x-axis
+daily['DateStr'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d')
+daily['DateFull'] = pd.to_datetime(daily['Date']).dt.strftime('%b %d, %Y')
+
 # Calculate backlog indicator
 daily['Backlog'] = daily['Received'] - daily['Handled']
 daily['Cumulative_Backlog'] = daily['Backlog'].cumsum()
@@ -361,10 +365,10 @@ capacity_bars = alt.Chart(daily).mark_bar(
     color='#94a3b8',
     opacity=0.25
 ).encode(
-    x=alt.X('Date:O', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b', format='%b %d')),
+    x=alt.X('DateStr:N', title='Date', axis=alt.Axis(labelAngle=-45, labelFontSize=12, labelColor='#64748b'), sort=None),
     y=alt.Y('Capacity_Hours:Q', title='Agent Hours Available', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
-        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+        alt.Tooltip('DateFull:N', title='Date'),
         alt.Tooltip('Capacity_Hours:Q', title='Agent Hours', format='.1f')
     ]
 )
@@ -379,10 +383,10 @@ received_line = alt.Chart(daily).mark_line(
         color='#2563eb'
     )
 ).encode(
-    x=alt.X('Date:O'),
+    x=alt.X('DateStr:N', sort=None),
     y=alt.Y('Received:Q', title='Email Volume', axis=alt.Axis(labelFontSize=12, labelColor='#64748b', titleColor='#0f172a', titleFontWeight=600)),
     tooltip=[
-        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+        alt.Tooltip('DateFull:N', title='Date'),
         alt.Tooltip('Received:Q', title='Emails Received'),
         alt.Tooltip('Handled:Q', title='Emails Handled'),
         alt.Tooltip('Backlog:Q', title='Daily Backlog', format='+d')
@@ -399,10 +403,10 @@ handled_line = alt.Chart(daily).mark_line(
         color='#10b981'
     )
 ).encode(
-    x=alt.X('Date:O'),
+    x=alt.X('DateStr:N', sort=None),
     y=alt.Y('Handled:Q'),
     tooltip=[
-        alt.Tooltip('Date:T', title='Date', format='%b %d, %Y'),
+        alt.Tooltip('DateFull:N', title='Date'),
         alt.Tooltip('Handled:Q', title='Emails Handled'),
         alt.Tooltip('Received:Q', title='Emails Received')
     ]
@@ -421,7 +425,7 @@ daily_chart = alt.layer(
     strokeWidth=0
 )
 
-st.altair_chart(daily_chart, use_container_width=True)
+st.altair_chart(daily_chart, width='stretch')
 
 # Add legend
 st.markdown(
@@ -437,7 +441,7 @@ st.markdown(
 avg_capacity = daily['Capacity_Hours'].mean()
 avg_received = daily['Received'].mean()
 avg_handled = daily['Handled'].mean()
-total_backlog = daily['Cumulative_Backlog'].iloc[-1]
+total_backlog = daily['Cumulative_Backlog'].iloc[-1] if len(daily) > 0 else 0
 
 # Calculate theoretical handling capacity (hours * emails per hour)
 if avg_capacity > 0 and emails_hr > 0:
@@ -516,4 +520,4 @@ response_chart = alt.Chart(daily_resp).mark_area(
     strokeWidth=0
 )
 
-st.altair_chart(response_chart, use_container_width=True)
+st.altair_chart(response_chart, width='stretch')

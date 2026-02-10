@@ -325,25 +325,6 @@ available_sec = sum_seconds(intervals)
 
 
 # =====================================================
-# CALCULATE DAILY CAPACITY
-# =====================================================
-
-def get_daily_capacity(date):
-    """Get available agent hours for a single day"""
-    d_start = pd.Timestamp(date)
-    d_end   = d_start + pd.Timedelta(days=1)
-    
-    day_intervals = [
-        x for x in (
-            clip(s, e, d_start, d_end)
-            for s, e in zip(pres_filtered["Start DT"], pres_filtered["End DT"])
-        ) if x
-    ]
-    
-    return sum_seconds(day_intervals) / 3600  # Convert to hours
-
-
-# =====================================================
 # METRICS
 # =====================================================
 
@@ -597,4 +578,5 @@ if 'case_id_column' in locals() and case_id_column != "None (disabled)":
             hide_index=True,
             use_container_width=True
         )
+
 

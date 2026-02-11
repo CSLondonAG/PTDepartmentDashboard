@@ -32,10 +32,19 @@ def load(path):
 resp  = load(BASE / RESP_FILE)
 items = load(BASE / ITEMS_FILE)
 pres  = load(BASE / PRES_FILE)
-email_rec = load(BASE / EMAIL_REC_FILE)
 
-for df in (resp, items, pres, email_rec):
+# Try to load email received file, fall back to resp if missing
+try:
+    email_rec = load(BASE / EMAIL_REC_FILE)
+except FileNotFoundError:
+    st.warning(f"Email received file not found. Using responded data instead.")
+    email_rec = None
+
+for df in (resp, items, pres):
     df.columns = df.columns.str.strip()
+
+if email_rec is not None:
+    email_rec.columns = email_rec.columns.str.strip()
 
 
 # Keep full resp for total count, create filtered version for ART
@@ -174,8 +183,12 @@ c6.metric("Utilisation", f"{util:.1%}")
 st.markdown("---")
 st.subheader("Daily Emails Received vs Items Handled vs Availability")
 
-# Emails received (from email_rec data - count of Date/Time Opened)
-daily = email_rec.groupby("Date").size().reset_index(name="Emails_Received")
+# Emails received (from email_rec data if available, otherwise resp data)
+if email_rec is not None:
+    daily = email_rec.groupby("Date").size().reset_index(name="Emails_Received")
+else:
+    # Fallback: use responded data
+    daily = resp.groupby("Date").size().reset_index(name="Emails_Received")
 
 # Items handled (from items data - all email channel items)
 items_daily = items.groupby("Date").size().reset_index(name="Items_Handled")
@@ -223,8 +236,6 @@ if len(daily) > 0:
         y="independent"
     ).properties(
         height=400
-    ).add_params(
-        alt.selection_single(fields=['Date_Label'], clear=False)
     )
 
     # Add legend manually with custom styling

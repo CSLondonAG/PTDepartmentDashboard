@@ -183,34 +183,46 @@ daily["Date_Label"] = daily["Date"].apply(lambda x: pd.Timestamp(x).strftime("%a
 daily = daily.sort_values("Date").reset_index(drop=True)
 
 if len(daily) > 0:
-    # Emails received bar (blue)
-    emails_bar = alt.Chart(daily).mark_bar(color="#3b82f6", opacity=0.85).encode(
+    # Available hours bar (light gray background)
+    availability_bar = alt.Chart(daily).mark_bar(color="#cbd5e1", opacity=0.6).encode(
         x=alt.X("Date_Label:N", title="", axis=alt.Axis(labelAngle=45)),
-        y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="left")),
-        tooltip=["Date:O", "Emails_Received:Q"]
+        y=alt.Y("Available_Hours:Q", title="Hours", axis=alt.Axis(orient="left")),
+        tooltip=["Date:O", alt.Tooltip("Available_Hours:Q", format=".1f", title="Available Hours")]
     )
 
-    # Items handled bar (green)
-    handled_bar = alt.Chart(daily).mark_bar(color="#10b981", opacity=0.7).encode(
+    # Emails received line (blue)
+    emails_line = alt.Chart(daily).mark_line(color="#3b82f6", size=3, point=True).encode(
+        x=alt.X("Date_Label:N", title=""),
+        y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="right")),
+        tooltip=["Date:O", alt.Tooltip("Emails_Received:Q", title="Emails Received")]
+    )
+
+    # Items handled line (green)
+    handled_line = alt.Chart(daily).mark_line(color="#10b981", size=3, point=True).encode(
         x=alt.X("Date_Label:N"),
         y=alt.Y("Items_Handled:Q"),
-        tooltip=["Date:O", "Items_Handled:Q"]
+        tooltip=["Date:O", alt.Tooltip("Items_Handled:Q", title="Items Handled")]
     )
 
-    # Available hours line (indigo)
-    availability_line = alt.Chart(daily).mark_line(color="#6366f1", size=3, point=True).encode(
-        x=alt.X("Date_Label:N"),
-        y=alt.Y("Available_Hours:Q", title="Available Hours", axis=alt.Axis(orient="right")),
-        tooltip=["Date:O", alt.Tooltip("Available_Hours:Q", format=".1f")]
-    )
-
-    chart = alt.layer(emails_bar, handled_bar, availability_line).resolve_scale(
+    chart = alt.layer(availability_bar, emails_line, handled_line).resolve_scale(
         y="independent"
     ).properties(
         height=400
+    ).add_params(
+        alt.selection_single(fields=['Date_Label'], clear=False)
     )
 
+    # Add legend manually with custom styling
     st.altair_chart(chart, use_container_width=True)
+    
+    # Create legend below chart
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("🔹 <span style='color:#cbd5e1'>**Available Hours (Bar)**</span>", unsafe_allow_html=True)
+    with col2:
+        st.markdown("📈 <span style='color:#3b82f6'>**Emails Received (Line)**</span>", unsafe_allow_html=True)
+    with col3:
+        st.markdown("✓ <span style='color:#10b981'>**Items Handled (Line)**</span>", unsafe_allow_html=True)
 else:
     st.warning("No data available for the selected date range")
 

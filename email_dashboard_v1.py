@@ -299,7 +299,7 @@ if len(daily) > 0:
         {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
     )
 
-    count_chart = alt.Chart(count_long).mark_line(point=True, strokeWidth=3).encode(
+    count_lines = alt.Chart(count_long).mark_line(point=True, strokeWidth=3).encode(
         x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
         y=alt.Y("Count:Q", title="Email / Item Count"),
         color=alt.Color(
@@ -316,16 +316,36 @@ if len(daily) > 0:
             alt.Tooltip("Metric:N"),
             alt.Tooltip("Count:Q", format=","),
         ],
-    ) .properties(height=460)
+    )
+    count_labels = alt.Chart(count_long).mark_text(dy=-10, fontSize=11).encode(
+        x=alt.X("DateLabel:O", sort=date_order),
+        y=alt.Y("Count:Q"),
+        text=alt.Text("Count:Q", format=","),
+        color=alt.Color(
+            "Metric:N",
+            scale=alt.Scale(
+                domain=["Emails Received", "Items Handled"],
+                range=["#15803d", "#22c55e"],
+            ),
+            legend=None,
+        ),
+    )
+    count_chart = alt.layer(count_lines, count_labels).properties(height=460)
 
-    availability_chart = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.85).encode(
+    availability_bars = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.85).encode(
         x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
         y=alt.Y("Available_Hours:Q", title="Available Hours"),
         tooltip=[
             alt.Tooltip("Date:T", format="%a %d %b"),
             alt.Tooltip("Available_Hours:Q", format=".1f"),
         ],
-    ).properties(height=260)
+    )
+    availability_labels = alt.Chart(daily).mark_text(dy=-10, color="#166534", fontSize=11).encode(
+        x=alt.X("DateLabel:O", sort=date_order),
+        y=alt.Y("Available_Hours:Q"),
+        text=alt.Text("Available_Hours:Q", format=".1f"),
+    )
+    availability_chart = alt.layer(availability_bars, availability_labels).properties(height=260)
 
     st.altair_chart(count_chart, use_container_width=True)
     st.altair_chart(availability_chart, use_container_width=True)
@@ -360,38 +380,69 @@ if len(daily) > 0:
     dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
         x=alt.X("DoW:O", title="Day of Week", sort=ordered_dow),
         y=alt.Y("AverageCount:Q", title="Average Count", axis=alt.Axis(orient="left")),
-        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(range=["#15803d", "#22c55e"])),
+        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(range=["#15803d", "#22c55e", "#0f766e"])),
         xOffset="Metric:N",
         tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=".1f")],
     )
-
-    dow_hours_line = alt.Chart(dow).mark_line(point=True, color="#0f766e", strokeWidth=3).encode(
+    dow_bar_labels = alt.Chart(dow_counts_long).mark_text(dy=-8, fontSize=10).encode(
         x=alt.X("DoW:O", sort=ordered_dow),
-        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right")),
-        tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
+        y=alt.Y("AverageCount:Q"),
+        xOffset="Metric:N",
+        text=alt.Text("AverageCount:Q", format=".1f"),
+        color=alt.Color("Metric:N", scale=alt.Scale(range=["#15803d", "#22c55e", "#0f766e"]), legend=None),
     )
 
-    dow_chart = alt.layer(dow_bar, dow_hours_line).resolve_scale(y="independent").properties(height=420)
+    dow_hours = dow.copy()
+    dow_hours["Metric"] = "Available Hours"
+    dow_hours_line = alt.Chart(dow_hours).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X("DoW:O", sort=ordered_dow),
+        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right")),
+        color=alt.Color(
+            "Metric:N",
+            title="Legend",
+            scale=alt.Scale(domain=["Emails Received", "Items Handled", "Available Hours"], range=["#15803d", "#22c55e", "#0f766e"]),
+        ),
+        tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
+    )
+    dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0f766e", fontSize=10).encode(
+        x=alt.X("DoW:O", sort=ordered_dow),
+        y=alt.Y("Available_Hours:Q"),
+        text=alt.Text("Available_Hours:Q", format=".1f"),
+    )
+
+    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).resolve_scale(y="independent").properties(height=420)
     st.altair_chart(dow_chart, use_container_width=True)
 
 st.subheader("SLA and Backlog Aging")
 col_a, col_b = st.columns(2)
 
 with col_a:
-    closed_aging_chart = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
-        x=alt.X("Bucket:N", title="Business-hour Response Bucket"),
+    closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
+        x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
         y=alt.Y("Count:Q", title="Closed Email Count"),
         tooltip=["Bucket", "Count"],
-    ).properties(height=360)
+    )
+    closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
+        x=alt.X("Bucket:N", sort=aging_labels),
+        y=alt.Y("Count:Q"),
+        text=alt.Text("Count:Q", format=","),
+    )
+    closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=360)
     st.caption("Closed Emails (response-time buckets)")
     st.altair_chart(closed_aging_chart, use_container_width=True)
 
 with col_b:
-    backlog_aging_chart = alt.Chart(aging_summary).mark_bar(color="#16a34a").encode(
-        x=alt.X("Bucket:N", title="Business-hour Aging Bucket"),
+    backlog_aging_bars = alt.Chart(aging_summary).mark_bar(color="#16a34a").encode(
+        x=alt.X("Bucket:N", title="Business-hour Aging Bucket", sort=aging_labels),
         y=alt.Y("Count:Q", title="Open Email Count"),
         tooltip=["Bucket", "Count"],
-    ).properties(height=360)
+    )
+    backlog_aging_labels = alt.Chart(aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
+        x=alt.X("Bucket:N", sort=aging_labels),
+        y=alt.Y("Count:Q"),
+        text=alt.Text("Count:Q", format=","),
+    )
+    backlog_aging_chart = alt.layer(backlog_aging_bars, backlog_aging_labels).properties(height=360)
     st.caption("Open Backlog")
     st.altair_chart(backlog_aging_chart, use_container_width=True)
 

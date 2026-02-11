@@ -79,9 +79,20 @@ def sum_seconds(iv):
 
 # ---------------- DATE FILTER ----------------
 
+# Calculate previous completed week (Monday-Sunday)
+today = pd.Timestamp.now().date()
+# Find last Sunday
+days_since_sunday = (today.weekday() + 1) % 7
+last_sunday = today - pd.Timedelta(days=days_since_sunday if days_since_sunday > 0 else 7)
+week_start = last_sunday - pd.Timedelta(days=6)  # Previous Monday
+
+default_start = max(week_start, resp["Date"].min())
+default_end = min(last_sunday, resp["Date"].max())
+
 start, end = st.date_input(
     "Date Range",
-    value=(resp["Date"].min(), resp["Date"].max())
+    value=(default_start, default_end),
+    help="Shows previous completed week by default"
 )
 
 resp  = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
@@ -161,38 +172,35 @@ def hours_for_day(day):
 
 daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
 
+# Format date for display (e.g., "Mon 10 Feb")
+daily["Date_Label"] = daily["Date"].apply(lambda x: pd.Timestamp(x).strftime("%a %d %b"))
+
 # Emails received bar (blue)
 emails_bar = alt.Chart(daily).mark_bar(color="#3b82f6", opacity=0.85).encode(
-    x=alt.X("Date:O", title="Date"),
+    x=alt.X("Date_Label:O", title="", sort=list(daily["Date_Label"])),
     y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="left", labelColor="#3b82f6")),
-    tooltip=["Date:O", "Emails_Received:Q"]
-).properties(
-    title="Emails Received"
+    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), "Emails_Received:Q"]
 )
 
 # Items handled bar (green)
 handled_bar = alt.Chart(daily).mark_bar(color="#10b981", opacity=0.7).encode(
-    x=alt.X("Date:O"),
+    x=alt.X("Date_Label:O", sort=list(daily["Date_Label"])),
     y=alt.Y("Items_Handled:Q"),
-    tooltip=["Date:O", "Items_Handled:Q"]
-).properties(
-    title="Items Handled"
+    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), "Items_Handled:Q"]
 )
 
 # Available hours line (indigo)
-availability_line = alt.Chart(daily).mark_line(color="#6366f1", size=3).encode(
-    x=alt.X("Date:O"),
+availability_line = alt.Chart(daily).mark_line(color="#6366f1", size=3, point=True).encode(
+    x=alt.X("Date_Label:O", sort=list(daily["Date_Label"])),
     y=alt.Y("Available_Hours:Q", title="Available Hours", axis=alt.Axis(orient="right", labelColor="#6366f1")),
-    tooltip=["Date:O", alt.Tooltip("Available_Hours:Q", format=".1f")]
-).properties(
-    title="Agent Availability"
+    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), alt.Tooltip("Available_Hours:Q", format=".1f")]
 )
 
 chart = alt.layer(emails_bar, handled_bar, availability_line).resolve_scale(
     y="independent"
 ).properties(
-    width=900,
-    height=450
+    width=1000,
+    height=400
 )
 
 st.altair_chart(chart, use_container_width=True)

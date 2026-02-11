@@ -10,6 +10,7 @@ BASE = Path(__file__).parent
 EMAIL_REC_FILE = "EmailReceivedPT.csv"
 ITEMS_FILE = "ItemsPT.csv"
 PRES_FILE = "PresencePT.csv"
+CASE_CAT_FILE = "CaseCatPT.csv"
 
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 BUSINESS_START_HOUR = 7
@@ -98,8 +99,9 @@ def hm(sec):
 email_rec = load(BASE / EMAIL_REC_FILE)
 items = load(BASE / ITEMS_FILE)
 pres = load(BASE / PRES_FILE)
+case_cat = load(BASE / CASE_CAT_FILE)
 
-for df in (email_rec, items, pres):
+for df in (email_rec, items, pres, case_cat):
     df.columns = df.columns.str.strip()
 
 email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
@@ -107,6 +109,9 @@ email_rec["CompletedDT"] = pd.to_datetime(email_rec["Completion Date"], errors="
 email_rec["Date_Opened"] = email_rec["OpenedDT"].dt.date
 email_rec["Date_Completed"] = email_rec["CompletedDT"].dt.date
 email_rec["TargetResponseHours"] = pd.to_numeric(email_rec["Target Response (Hours)"], errors="coerce")
+
+case_cat["OpenedDT"] = pd.to_datetime(case_cat["Date/Time Opened"], errors="coerce", dayfirst=True)
+case_cat["Date_Opened"] = case_cat["OpenedDT"].dt.date
 
 items["AssignDT"] = pd.to_datetime(
     items["Assign Date"].astype(str) + " " + items["Assign Time"].astype(str),
@@ -184,6 +189,11 @@ email_rec_period = email_rec[
     & (email_rec["Milestone"].isin(selected_milestones))
 ].copy()
 
+case_cat_period = case_cat[
+    (case_cat["Date_Opened"] >= start)
+    & (case_cat["Date_Opened"] <= end)
+].copy()
+
 items_period = items[
     (items["Date_Closed"] >= start)
     & (items["Date_Closed"] <= end)
@@ -223,28 +233,15 @@ email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
 items_invalid_close = items_period["CloseDT"].isna().sum()
 
-backlog = email_rec[
-    (email_rec["OpenedDT"] <= end_ts)
-    & (email_rec["CompletedDT"].isna() | (email_rec["CompletedDT"] > end_ts))
-].copy()
-backlog_count = len(backlog)
-
-if backlog_count > 0:
-    backlog["OpenBusinessSecToEnd"] = backlog["OpenedDT"].apply(lambda dt: business_seconds_between(dt, end_ts))
+if len(completed_emails) > 0:
+    closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
+    aging_bins = [0, 4, 24, 72, np.inf]
+    aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
+    completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
+    closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
+    closed_aging_summary.columns = ["Bucket", "Count"]
 else:
-    backlog["OpenBusinessSecToEnd"] = pd.Series(dtype=float)
-
-business_age_hours = backlog["OpenBusinessSecToEnd"] / 3600
-aging_bins = [0, 4, 24, 72, np.inf]
-aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
-backlog["AgingBucket"] = pd.cut(business_age_hours, bins=aging_bins, labels=aging_labels, right=False)
-aging_summary = backlog["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
-aging_summary.columns = ["Bucket", "Count"]
-
-closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
-completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
-closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
-closed_aging_summary.columns = ["Bucket", "Count"]
+    closed_aging_summary = pd.DataFrame({"Bucket": aging_labels, "Count": [0] * 4})
 
 
 # ---------------- DISPLAY ----------------
@@ -348,7 +345,7 @@ if len(daily) > 0:
     dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).resolve_scale(y="independent").properties(height=420)
     st.altair_chart(dow_chart, use_container_width=True)
 
-st.subheader("SLA and Backlog Aging")
+st.subheader("SLA Performance")
 col_a, col_b = st.columns(2)
 
 with col_a:
@@ -367,19 +364,26 @@ with col_a:
     st.altair_chart(closed_aging_chart, use_container_width=True)
 
 with col_b:
-    backlog_aging_bars = alt.Chart(aging_summary).mark_bar(color="#16a34a").encode(
-        x=alt.X("Bucket:N", title="Business-hour Aging Bucket", sort=aging_labels),
-        y=alt.Y("Count:Q", title="Open Email Count"),
-        tooltip=["Bucket", "Count"],
-    )
-    backlog_aging_labels = alt.Chart(aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
-        x=alt.X("Bucket:N", sort=aging_labels),
-        y=alt.Y("Count:Q"),
-        text=alt.Text("Count:Q", format=","),
-    )
-    backlog_aging_chart = alt.layer(backlog_aging_bars, backlog_aging_labels).properties(height=360)
-    st.caption("Open Backlog")
-    st.altair_chart(backlog_aging_chart, use_container_width=True)
+    # Category/Reason breakdown
+    if len(case_cat_period) > 0:
+        cat_reason_summary = case_cat_period.groupby(["Category", "Reason"]).size().reset_index(name="Count")
+        cat_reason_summary = cat_reason_summary.sort_values("Count", ascending=False)
+
+        cat_bars = alt.Chart(cat_reason_summary).mark_bar(color="#16a34a").encode(
+            x=alt.X("Count:Q", title="Case Count"),
+            y=alt.Y("Category:N", title="Category", sort="-x"),
+            color=alt.Color("Category:N", title="Category", legend=None),
+            tooltip=["Category", "Count"],
+        )
+        cat_labels = alt.Chart(cat_reason_summary).mark_text(dx=3, fontSize=10).encode(
+            y=alt.Y("Category:N", sort="-x"),
+            text=alt.Text("Count:Q", format=","),
+        )
+        cat_chart = alt.layer(cat_bars, cat_labels).properties(height=360)
+        st.caption("Cases by Category")
+        st.altair_chart(cat_chart, use_container_width=True)
+    else:
+        st.info("No case category data available for the selected period")
 
 st.subheader("Daily Breakdown")
 daily_display = daily.copy()

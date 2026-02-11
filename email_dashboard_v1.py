@@ -21,7 +21,13 @@ def load(path):
     try:
         return pd.read_csv(path, encoding="cp1252", low_memory=False)
     except:
-        return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
+        try:
+            return pd.read_csv(path, encoding="utf-16", sep="\t", low_memory=False)
+        except:
+            try:
+                return pd.read_csv(path, encoding="utf-8", low_memory=False)
+            except:
+                return pd.read_csv(path, encoding="latin-1", low_memory=False)
 
 resp  = load(BASE / RESP_FILE)
 items = load(BASE / ITEMS_FILE)

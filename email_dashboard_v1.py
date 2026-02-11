@@ -309,27 +309,49 @@ def hours_for_day(day_ts):
 if len(daily) > 0:
     daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
     daily = daily.sort_values("Date").reset_index(drop=True)
+    daily["DateLabel"] = daily["Date"].dt.strftime("%a %d %b")
+    date_order = daily["DateLabel"].tolist()
 
-    availability_bar = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.8).encode(
-        x=alt.X("Date:T", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
-        y=alt.Y("Available_Hours:Q", title="Hours", axis=alt.Axis(orient="left")),
-        tooltip=[alt.Tooltip("Date:T", format="%a %d %b"), alt.Tooltip("Available_Hours:Q", format=".1f")],
+    count_long = daily.melt(
+        id_vars=["Date", "DateLabel"],
+        value_vars=["Emails_Received", "Items_Handled"],
+        var_name="Metric",
+        value_name="Count",
+    )
+    count_long["Metric"] = count_long["Metric"].replace(
+        {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
     )
 
-    emails_line = alt.Chart(daily).mark_line(color="#15803d", size=3, point=True).encode(
-        x=alt.X("Date:T", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
-        y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="right")),
-        tooltip=[alt.Tooltip("Date:T", format="%a %d %b"), alt.Tooltip("Emails_Received:Q")],
-    )
+    count_chart = alt.Chart(count_long).mark_line(point=True, strokeWidth=3).encode(
+        x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
+        y=alt.Y("Count:Q", title="Email / Item Count"),
+        color=alt.Color(
+            "Metric:N",
+            title="Legend",
+            scale=alt.Scale(
+                domain=["Emails Received", "Items Handled"],
+                range=["#15803d", "#22c55e"],
+            ),
+            legend=alt.Legend(orient="top"),
+        ),
+        tooltip=[
+            alt.Tooltip("Date:T", format="%a %d %b"),
+            alt.Tooltip("Metric:N"),
+            alt.Tooltip("Count:Q", format=","),
+        ],
+    ).properties(height=320)
 
-    handled_line = alt.Chart(daily).mark_line(color="#22c55e", size=3, point=True).encode(
-        x=alt.X("Date:T", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
-        y=alt.Y("Items_Handled:Q", title=""),
-        tooltip=[alt.Tooltip("Date:T", format="%a %d %b"), alt.Tooltip("Items_Handled:Q")],
-    )
+    availability_chart = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.85).encode(
+        x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
+        y=alt.Y("Available_Hours:Q", title="Available Hours"),
+        tooltip=[
+            alt.Tooltip("Date:T", format="%a %d %b"),
+            alt.Tooltip("Available_Hours:Q", format=".1f"),
+        ],
+    ).properties(height=180)
 
-    chart = alt.layer(availability_bar, emails_line, handled_line).resolve_scale(y="independent").properties(height=400)
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(count_chart, use_container_width=True)
+    st.altair_chart(availability_chart, use_container_width=True)
 else:
     st.warning("No data available for the selected date range")
 

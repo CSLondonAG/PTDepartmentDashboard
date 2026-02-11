@@ -6,12 +6,8 @@ from pathlib import Path
 st.set_page_config(layout="wide")
 BASE = Path(__file__).parent
 
-RESP_FILE  = "Responded PT.csv"
-ITEMS_FILE = "ItemsPT.csv"
+EMAIL_REC_FILE = "Email_Received_PT.csv"
 PRES_FILE  = "PresencePT.csv"
-EMAIL_REC_FILE = "EmailReceivedPT.csv"
-
-EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
 
@@ -29,69 +25,28 @@ def load(path):
             except:
                 return pd.read_csv(path, encoding="latin-1", low_memory=False)
 
-resp  = load(BASE / RESP_FILE)
-items = load(BASE / ITEMS_FILE)
-pres  = load(BASE / PRES_FILE)
-
-# Try to load email received file, fall back to resp if missing
-try:
-    email_rec = load(BASE / EMAIL_REC_FILE)
-except FileNotFoundError:
-    st.warning(f"Email received file not found. Using responded data instead.")
-    email_rec = None
-
-for df in (resp, items, pres):
-    df.columns = df.columns.str.strip()
-
-if email_rec is not None:
-    email_rec.columns = email_rec.columns.str.strip()
+email_rec = load(BASE / EMAIL_REC_FILE)
+email_rec.columns = email_rec.columns.str.strip()
 
 
-# Keep full resp for total count, create filtered version for ART
-resp_full = resp.copy()
-
-# ---------------- ART (SINGLE-INSTANCE CASES ONLY) ----------------
-
-resp["OpenedDT"] = pd.to_datetime(resp["Date/Time Opened"], errors="coerce", dayfirst=True)
-resp["ReplyDT"]  = pd.to_datetime(resp["Email Message Date"], errors="coerce", dayfirst=True)
-
-# Count before filtering
-total_responded = len(resp_full)
-resp = resp.groupby("Case ID").filter(lambda x: len(x) == 1)
-single_instance = len(resp)
-reopened_excluded = total_responded - single_instance
-
-resp["ARTsec"] = (resp["ReplyDT"] - resp["OpenedDT"]).dt.total_seconds()
-resp["Date"]   = resp["ReplyDT"].dt.date
-
-
-# ---------------- AHT (ITEMS ONLY - ALL CASES) ----------------
-
-items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
-
-items["HandleSec"] = pd.to_numeric(items["Handle Time"], errors="coerce")
-
-items["AssignDT"] = pd.to_datetime(
-    items["Assign Date"].astype(str) + " " + items["Assign Time"].astype(str),
-    errors="coerce",
-    dayfirst=True
-)
-
-items["Date"] = items["AssignDT"].dt.date
-
-
-# ---------------- EMAIL RECEIVED ----------------
+# ---------------- PARSE EMAIL RECEIVED DATA ----------------
 
 email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
-email_rec["Date"] = email_rec["OpenedDT"].dt.date
+email_rec["CompletedDT"] = pd.to_datetime(email_rec["Completion Date"], errors="coerce", dayfirst=True)
+
+email_rec["Date_Opened"] = email_rec["OpenedDT"].dt.date
+email_rec["Date_Completed"] = email_rec["CompletedDT"].dt.date
 
 
-# ---------------- PRESENCE ----------------
-
-pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
-pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
-
-pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
+# Load presence for availability calculation
+try:
+    pres = load(BASE / PRES_FILE)
+    pres.columns = pres.columns.str.strip()
+    pres["Start DT"] = pd.to_datetime(pres["Start DT"], errors="coerce", dayfirst=True)
+    pres["End DT"]   = pd.to_datetime(pres["End DT"], errors="coerce", dayfirst=True)
+    pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)]
+except:
+    pres = None
 
 
 def clip(s, e, ws, we):
@@ -113,8 +68,8 @@ days_since_sunday = (today.weekday() + 1) % 7
 last_sunday = today - pd.Timedelta(days=days_since_sunday if days_since_sunday > 0 else 7)
 week_start = last_sunday - pd.Timedelta(days=6)  # Previous Monday
 
-default_start = max(week_start, resp["Date"].min())
-default_end = min(last_sunday, resp["Date"].max())
+default_start = max(week_start, email_rec["Date_Opened"].min())
+default_end = min(last_sunday, email_rec["Date_Opened"].max())
 
 start, end = st.date_input(
     "Date Range",
@@ -122,26 +77,45 @@ start, end = st.date_input(
     help="Shows previous completed week by default"
 )
 
-resp  = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
-items = items[(items["Date"] >= start) & (items["Date"] <= end)]
-email_rec = email_rec[(email_rec["Date"] >= start) & (email_rec["Date"] <= end)]
+email_rec_filtered = email_rec[(email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)].copy()
 
 start_ts = pd.Timestamp(start)
 end_ts = pd.Timestamp(end) + pd.Timedelta(days=1)
 
 
-# ---------------- HOURS + UTILIZATION ----------------
+# ---------------- METRICS CALCULATIONS ----------------
 
-intervals = [clip(s, e, start_ts, end_ts) for s, e in zip(pres["Start DT"], pres["End DT"])]
-intervals = [x for x in intervals if x]
+# Emails received: count of non-null Date/Time Opened
+total_received = email_rec_filtered["OpenedDT"].notna().sum()
 
-available_sec = sum_seconds(intervals)
-available_hours = available_sec / 3600
+# Handled: count of non-null Completion Date
+total_handled = email_rec_filtered["CompletedDT"].notna().sum()
 
-total_handle = items["HandleSec"].sum()
-avg_aht = items["HandleSec"].mean()
+# Single response cases: those with completion date (handled)
+single_instance = total_handled
 
-util = total_handle / available_sec if available_sec else 0
+# Unhandled (not yet completed)
+unhandled = total_received - total_handled
+
+# Calculate ART: Average Response Time (from Opened to Completed, only for completed items)
+email_rec_filtered["ARTsec"] = (email_rec_filtered["CompletedDT"] - email_rec_filtered["OpenedDT"]).dt.total_seconds()
+completed_mask = email_rec_filtered["CompletedDT"].notna()
+avg_art = email_rec_filtered[completed_mask]["ARTsec"].mean()
+
+# Calculate AHT: Average Handle Time (same as ART for this data)
+avg_aht = avg_art
+
+
+# Available hours and utilization
+available_hours = 0
+util = 0
+
+if pres is not None:
+    intervals = [clip(s, e, start_ts, end_ts) for s, e in zip(pres["Start DT"], pres["End DT"])]
+    intervals = [x for x in intervals if x]
+    available_sec = sum_seconds(intervals)
+    available_hours = available_sec / 3600
+    util = (total_handled * (avg_aht / 3600)) / available_hours if available_hours > 0 else 0
 
 
 # ---------------- FORMAT ----------------
@@ -170,9 +144,9 @@ st.markdown(f"**Period:** {start} to {end}")
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-c1.metric("Total Responded", total_responded)
-c2.metric("Single Response", single_instance)
-c3.metric("Avg Response Time", hm(resp["ARTsec"].mean()))
+c1.metric("Total Received", total_received)
+c2.metric("Total Handled", total_handled)
+c3.metric("Avg Response Time", hm(avg_art))
 c4.metric("Avg Handle Time", mmss(avg_aht))
 c5.metric("Available Hours", f"{available_hours:.1f}")
 c6.metric("Utilisation", f"{util:.1%}")
@@ -183,21 +157,23 @@ c6.metric("Utilisation", f"{util:.1%}")
 st.markdown("---")
 st.subheader("Daily Emails Received vs Items Handled vs Availability")
 
-# Emails received (from email_rec data if available, otherwise resp data)
-if email_rec is not None:
-    daily = email_rec.groupby("Date").size().reset_index(name="Emails_Received")
-else:
-    # Fallback: use responded data
-    daily = resp.groupby("Date").size().reset_index(name="Emails_Received")
+# Count emails received by Date Opened
+daily = email_rec_filtered.groupby("Date_Opened").size().reset_index(name="Emails_Received")
+daily = daily.rename(columns={"Date_Opened": "Date"})
 
-# Items handled (from items data - all email channel items)
-items_daily = items.groupby("Date").size().reset_index(name="Items_Handled")
-daily = daily.merge(items_daily, on="Date", how="outer").fillna(0)
+# Count handled by Date Completed
+handled_daily = email_rec_filtered[email_rec_filtered["CompletedDT"].notna()].groupby("Date_Completed").size().reset_index(name="Items_Handled")
+handled_daily = handled_daily.rename(columns={"Date_Completed": "Date"})
+
+# Merge the two
+daily = daily.merge(handled_daily, on="Date", how="outer").fillna(0)
 daily["Items_Handled"] = daily["Items_Handled"].astype(int)
 daily["Emails_Received"] = daily["Emails_Received"].astype(int)
 
 # Available hours per day
 def hours_for_day(day):
+    if pres is None:
+        return 0
     ds = pd.Timestamp(day)
     de = ds + pd.Timedelta(days=1)
     iv = [clip(s, e, ds, de) for s, e in zip(pres["Start DT"], pres["End DT"])]
@@ -205,9 +181,6 @@ def hours_for_day(day):
     return sum_seconds(iv) / 3600
 
 daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
-
-# Format date for display (e.g., "Mon 10 Feb")
-daily["Date_Label"] = daily["Date"].apply(lambda x: pd.Timestamp(x).strftime("%a %d %b"))
 daily = daily.sort_values("Date").reset_index(drop=True)
 
 if len(daily) > 0:
@@ -238,7 +211,6 @@ if len(daily) > 0:
         height=400
     )
 
-    # Add legend manually with custom styling
     st.altair_chart(chart, use_container_width=True)
     
     # Create legend below chart

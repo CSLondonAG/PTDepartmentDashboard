@@ -185,23 +185,23 @@ daily = daily.sort_values("Date").reset_index(drop=True)
 if len(daily) > 0:
     # Available hours bar (light gray background)
     availability_bar = alt.Chart(daily).mark_bar(color="#cbd5e1", opacity=0.6).encode(
-        x=alt.X("Date_Label:N", title="", axis=alt.Axis(labelAngle=45)),
+        x=alt.X("Date:O", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
         y=alt.Y("Available_Hours:Q", title="Hours", axis=alt.Axis(orient="left")),
-        tooltip=["Date:O", alt.Tooltip("Available_Hours:Q", format=".1f", title="Available Hours")]
+        tooltip=[alt.Tooltip("Date:O", format="%a %d %b"), alt.Tooltip("Available_Hours:Q", format=".1f", title="Available Hours")]
     )
 
     # Emails received line (blue)
     emails_line = alt.Chart(daily).mark_line(color="#3b82f6", size=3, point=True).encode(
-        x=alt.X("Date_Label:N", title=""),
+        x=alt.X("Date:O", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
         y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="right")),
-        tooltip=["Date:O", alt.Tooltip("Emails_Received:Q", title="Emails Received")]
+        tooltip=[alt.Tooltip("Date:O", format="%a %d %b"), alt.Tooltip("Emails_Received:Q", title="Emails Received")]
     )
 
     # Items handled line (green)
     handled_line = alt.Chart(daily).mark_line(color="#10b981", size=3, point=True).encode(
-        x=alt.X("Date_Label:N"),
+        x=alt.X("Date:O", title="", axis=alt.Axis(labelAngle=45, format="%a %d %b")),
         y=alt.Y("Items_Handled:Q"),
-        tooltip=["Date:O", alt.Tooltip("Items_Handled:Q", title="Items Handled")]
+        tooltip=[alt.Tooltip("Date:O", format="%a %d %b"), alt.Tooltip("Items_Handled:Q", title="Items Handled")]
     )
 
     chart = alt.layer(availability_bar, emails_line, handled_line).resolve_scale(

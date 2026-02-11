@@ -223,15 +223,6 @@ email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
 items_invalid_close = items_period["CloseDT"].isna().sum()
 
-sla_df = completed_emails[completed_emails["TargetResponseHours"].notna()].copy()
-if len(sla_df) > 0:
-    sla_df["ResponseBusinessHours"] = sla_df["ResponseTimeBusinessSec"] / 3600
-    sla_met = (sla_df["ResponseBusinessHours"] <= sla_df["TargetResponseHours"]).sum()
-    sla_missed = (sla_df["ResponseBusinessHours"] > sla_df["TargetResponseHours"]).sum()
-else:
-    sla_met = 0
-    sla_missed = 0
-
 backlog = email_rec[
     (email_rec["OpenedDT"] <= end_ts)
     & (email_rec["CompletedDT"].isna() | (email_rec["CompletedDT"] > end_ts))
@@ -243,18 +234,17 @@ if backlog_count > 0:
 else:
     backlog["OpenBusinessSecToEnd"] = pd.Series(dtype=float)
 
-backlog_overdue = backlog[
-    backlog["TargetResponseHours"].notna()
-    & ((backlog["OpenBusinessSecToEnd"] / 3600) > backlog["TargetResponseHours"])
-]
-overdue_open_count = len(backlog_overdue)
-
 business_age_hours = backlog["OpenBusinessSecToEnd"] / 3600
 aging_bins = [0, 4, 24, 72, np.inf]
 aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
 backlog["AgingBucket"] = pd.cut(business_age_hours, bins=aging_bins, labels=aging_labels, right=False)
 aging_summary = backlog["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
 aging_summary.columns = ["Bucket", "Count"]
+
+closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
+completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
+closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
+closed_aging_summary.columns = ["Bucket", "Count"]
 
 
 # ---------------- DISPLAY ----------------
@@ -268,19 +258,6 @@ c3.metric("Avg Response Time (BH)", hm(avg_art))
 c4.metric("Avg Handle Time", mmss(avg_aht))
 c5.metric("Available Hours", f"{available_hours:.1f}")
 c6.metric("Utilisation", f"{util:.1%}")
-
-c7, c8, c9, c10 = st.columns(4)
-c7.metric("SLA Met", f"{sla_met:,}")
-c8.metric("SLA Missed", f"{sla_missed:,}")
-c9.metric("Backlog (Open)", f"{backlog_count:,}")
-c10.metric("Overdue Open Emails", f"{overdue_open_count:,}")
-
-st.markdown("---")
-st.subheader("Data Quality")
-dq1, dq2, dq3 = st.columns(3)
-dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
-dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")
-dq3.metric("Invalid Item Close Timestamps", f"{items_invalid_close:,}")
 
 st.markdown("---")
 st.subheader("Daily Emails Received vs Items Handled vs Availability")
@@ -339,7 +316,7 @@ if len(daily) > 0:
             alt.Tooltip("Metric:N"),
             alt.Tooltip("Count:Q", format=","),
         ],
-    ).properties(height=320)
+    ) .properties(height=460)
 
     availability_chart = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.85).encode(
         x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
@@ -348,7 +325,7 @@ if len(daily) > 0:
             alt.Tooltip("Date:T", format="%a %d %b"),
             alt.Tooltip("Available_Hours:Q", format=".1f"),
         ],
-    ).properties(height=180)
+    ).properties(height=260)
 
     st.altair_chart(count_chart, use_container_width=True)
     st.altair_chart(availability_chart, use_container_width=True)
@@ -357,49 +334,66 @@ else:
 
 st.subheader("Day-of-Week Pattern")
 if len(daily) > 0:
+    ordered_dow = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     dow = daily.copy()
     dow["DoW"] = dow["Date"].dt.day_name()
-    ordered_dow = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    dow = dow.groupby("DoW", as_index=False)[["Emails_Received", "Items_Handled"]].mean()
-    dow["DoW"] = pd.Categorical(dow["DoW"], categories=ordered_dow, ordered=True)
-    dow = dow.sort_values("DoW")
 
-    dow_long = dow.melt(
+    dow = (
+        dow.groupby("DoW", as_index=False)[["Emails_Received", "Items_Handled", "Available_Hours"]]
+        .mean()
+        .set_index("DoW")
+        .reindex(ordered_dow, fill_value=0)
+        .reset_index()
+    )
+    dow["DoW"] = pd.Categorical(dow["DoW"], categories=ordered_dow, ordered=True)
+
+    dow_counts_long = dow.melt(
         id_vars="DoW",
         value_vars=["Emails_Received", "Items_Handled"],
         var_name="Metric",
-        value_name="Average",
+        value_name="AverageCount",
+    )
+    dow_counts_long["Metric"] = dow_counts_long["Metric"].replace(
+        {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
     )
 
-    dow_chart = alt.Chart(dow_long).mark_bar().encode(
-        x=alt.X("DoW:O", title="Day of Week"),
-        y=alt.Y("Average:Q", title="Average Count"),
-        color=alt.Color("Metric:N", scale=alt.Scale(range=["#15803d", "#22c55e"])),
+    dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
+        x=alt.X("DoW:O", title="Day of Week", sort=ordered_dow),
+        y=alt.Y("AverageCount:Q", title="Average Count", axis=alt.Axis(orient="left")),
+        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(range=["#15803d", "#22c55e"])),
         xOffset="Metric:N",
-        tooltip=["DoW", "Metric", alt.Tooltip("Average:Q", format=".2f")],
-    ).properties(height=300)
+        tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=".1f")],
+    )
 
+    dow_hours_line = alt.Chart(dow).mark_line(point=True, color="#0f766e", strokeWidth=3).encode(
+        x=alt.X("DoW:O", sort=ordered_dow),
+        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right")),
+        tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
+    )
+
+    dow_chart = alt.layer(dow_bar, dow_hours_line).resolve_scale(y="independent").properties(height=420)
     st.altair_chart(dow_chart, use_container_width=True)
 
 st.subheader("SLA and Backlog Aging")
 col_a, col_b = st.columns(2)
+
 with col_a:
-    sla_chart_df = pd.DataFrame({"Status": ["Met", "Missed"], "Count": [sla_met, sla_missed]})
-    sla_chart = alt.Chart(sla_chart_df).mark_bar().encode(
-        x="Status:N",
-        y="Count:Q",
-        color=alt.Color("Status:N", scale=alt.Scale(range=["#22c55e", "#dc2626"])),
-        tooltip=["Status", "Count"],
-    )
-    st.altair_chart(sla_chart, use_container_width=True)
+    closed_aging_chart = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
+        x=alt.X("Bucket:N", title="Business-hour Response Bucket"),
+        y=alt.Y("Count:Q", title="Closed Email Count"),
+        tooltip=["Bucket", "Count"],
+    ).properties(height=360)
+    st.caption("Closed Emails (response-time buckets)")
+    st.altair_chart(closed_aging_chart, use_container_width=True)
 
 with col_b:
-    aging_chart = alt.Chart(aging_summary).mark_bar(color="#16a34a").encode(
+    backlog_aging_chart = alt.Chart(aging_summary).mark_bar(color="#16a34a").encode(
         x=alt.X("Bucket:N", title="Business-hour Aging Bucket"),
         y=alt.Y("Count:Q", title="Open Email Count"),
         tooltip=["Bucket", "Count"],
-    )
-    st.altair_chart(aging_chart, use_container_width=True)
+    ).properties(height=360)
+    st.caption("Open Backlog")
+    st.altair_chart(backlog_aging_chart, use_container_width=True)
 
 st.subheader("Daily Breakdown")
 daily_display = daily.copy()
@@ -415,4 +409,12 @@ daily_display = daily_display.rename(
         "Available_Hours": "⏰ Hours",
     }
 )
-st.dataframe(daily_display.sort_values("Date", ascending=False), use_container_width=True, hide_index=True)
+st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
+
+
+st.markdown("---")
+with st.expander("Data Quality", expanded=False):
+    dq1, dq2, dq3 = st.columns(3)
+    dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
+    dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")
+    dq3.metric("Invalid Item Close Timestamps", f"{items_invalid_close:,}")

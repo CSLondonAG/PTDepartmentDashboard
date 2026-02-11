@@ -30,21 +30,25 @@ for df in (resp, items, pres):
     df.columns = df.columns.str.strip()
 
 
+# Keep full resp for total count, create filtered version for ART
+resp_full = resp.copy()
+
 # ---------------- ART (SINGLE-INSTANCE CASES ONLY) ----------------
 
 resp["OpenedDT"] = pd.to_datetime(resp["Date/Time Opened"], errors="coerce", dayfirst=True)
 resp["ReplyDT"]  = pd.to_datetime(resp["Email Message Date"], errors="coerce", dayfirst=True)
 
-# Filter to single instances only (excludes reopened cases)
-single_instance_count = len(resp)
+# Count before filtering
+total_responded = len(resp_full)
 resp = resp.groupby("Case ID").filter(lambda x: len(x) == 1)
-reopened_excluded = single_instance_count - len(resp)
+single_instance = len(resp)
+reopened_excluded = total_responded - single_instance
 
 resp["ARTsec"] = (resp["ReplyDT"] - resp["OpenedDT"]).dt.total_seconds()
 resp["Date"]   = resp["ReplyDT"].dt.date
 
 
-# ---------------- AHT (ITEMS ONLY) ----------------
+# ---------------- AHT (ITEMS ONLY - ALL CASES) ----------------
 
 items = items[items["Service Channel: Developer Name"] == EMAIL_CHANNEL].copy()
 
@@ -138,15 +142,16 @@ def hm(sec):
 
 st.title("Email Department Performance")
 
-st.markdown(f"**Analysis Period:** {start} to {end} | **Note:** Reopened cases excluded: {reopened_excluded}")
+st.markdown(f"**Period:** {start} to {end}")
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-c1.metric("Replies (Single-Instance)", len(resp))
-c2.metric("Avg Response Time (ART)", hm(resp["ARTsec"].mean()))
-c3.metric("Avg Handle Time (AHT)", mmss(avg_aht))
-c4.metric("Available Hours", f"{available_hours:.1f}")
-c5.metric("Utilisation", f"{util:.1%}")
+c1.metric("Total Responded", total_responded)
+c2.metric("Single Response", single_instance)
+c3.metric("Avg Response Time", hm(resp["ARTsec"].mean()))
+c4.metric("Avg Handle Time", mmss(avg_aht))
+c5.metric("Available Hours", f"{available_hours:.1f}")
+c6.metric("Utilisation", f"{util:.1%}")
 
 
 # ---------------- CHART ----------------
@@ -161,6 +166,7 @@ daily = resp.groupby("Date").size().reset_index(name="Emails_Received")
 items_daily = items.groupby("Date").size().reset_index(name="Items_Handled")
 daily = daily.merge(items_daily, on="Date", how="outer").fillna(0)
 daily["Items_Handled"] = daily["Items_Handled"].astype(int)
+daily["Emails_Received"] = daily["Emails_Received"].astype(int)
 
 # Available hours per day
 def hours_for_day(day):
@@ -174,49 +180,51 @@ daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
 
 # Format date for display (e.g., "Mon 10 Feb")
 daily["Date_Label"] = daily["Date"].apply(lambda x: pd.Timestamp(x).strftime("%a %d %b"))
+daily = daily.sort_values("Date").reset_index(drop=True)
 
-# Emails received bar (blue)
-emails_bar = alt.Chart(daily).mark_bar(color="#3b82f6", opacity=0.85).encode(
-    x=alt.X("Date_Label:O", title="", sort=list(daily["Date_Label"])),
-    y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="left", labelColor="#3b82f6")),
-    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), "Emails_Received:Q"]
-)
+if len(daily) > 0:
+    # Emails received bar (blue)
+    emails_bar = alt.Chart(daily).mark_bar(color="#3b82f6", opacity=0.85).encode(
+        x=alt.X("Date_Label:N", title="", axis=alt.Axis(labelAngle=45)),
+        y=alt.Y("Emails_Received:Q", title="Count", axis=alt.Axis(orient="left")),
+        tooltip=["Date:O", "Emails_Received:Q"]
+    )
 
-# Items handled bar (green)
-handled_bar = alt.Chart(daily).mark_bar(color="#10b981", opacity=0.7).encode(
-    x=alt.X("Date_Label:O", sort=list(daily["Date_Label"])),
-    y=alt.Y("Items_Handled:Q"),
-    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), "Items_Handled:Q"]
-)
+    # Items handled bar (green)
+    handled_bar = alt.Chart(daily).mark_bar(color="#10b981", opacity=0.7).encode(
+        x=alt.X("Date_Label:N"),
+        y=alt.Y("Items_Handled:Q"),
+        tooltip=["Date:O", "Items_Handled:Q"]
+    )
 
-# Available hours line (indigo)
-availability_line = alt.Chart(daily).mark_line(color="#6366f1", size=3, point=True).encode(
-    x=alt.X("Date_Label:O", sort=list(daily["Date_Label"])),
-    y=alt.Y("Available_Hours:Q", title="Available Hours", axis=alt.Axis(orient="right", labelColor="#6366f1")),
-    tooltip=[alt.Tooltip("Date:O", format="%Y-%m-%d"), alt.Tooltip("Available_Hours:Q", format=".1f")]
-)
+    # Available hours line (indigo)
+    availability_line = alt.Chart(daily).mark_line(color="#6366f1", size=3, point=True).encode(
+        x=alt.X("Date_Label:N"),
+        y=alt.Y("Available_Hours:Q", title="Available Hours", axis=alt.Axis(orient="right")),
+        tooltip=["Date:O", alt.Tooltip("Available_Hours:Q", format=".1f")]
+    )
 
-chart = alt.layer(emails_bar, handled_bar, availability_line).resolve_scale(
-    y="independent"
-).properties(
-    width=1000,
-    height=400
-)
+    chart = alt.layer(emails_bar, handled_bar, availability_line).resolve_scale(
+        y="independent"
+    ).properties(
+        height=400
+    )
 
-st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, use_container_width=True)
+else:
+    st.warning("No data available for the selected date range")
 
 # Daily detail table
 st.subheader("Daily Breakdown")
 daily_display = daily.copy()
-daily_display["Emails_Received"] = daily_display["Emails_Received"].astype(int)
-daily_display["Items_Handled"] = daily_display["Items_Handled"].astype(int)
-daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
 daily_display = daily_display.rename(columns={
     "Date": "Date",
     "Emails_Received": "📧 Emails Received",
     "Items_Handled": "✓ Items Handled",
     "Available_Hours": "⏰ Available Hours"
 })
+daily_display = daily_display[["Date", "📧 Emails Received", "✓ Items Handled", "⏰ Available Hours"]]
+daily_display["⏰ Available Hours"] = daily_display["⏰ Available Hours"].round(1)
 st.dataframe(
     daily_display.sort_values("Date", ascending=False),
     use_container_width=True,

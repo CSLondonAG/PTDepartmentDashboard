@@ -366,41 +366,45 @@ with col_a:
 with col_b:
     # Category/Reason breakdown
     if len(case_cat_period) > 0:
-        cat_reason_summary = case_cat_period.groupby(["Category", "Reason"]).size().reset_index(name="Count")
-        cat_reason_summary = cat_reason_summary.sort_values("Count", ascending=False)
+        cat_reason_summary = (
+            case_cat_period.groupby(["Category", "Reason"], dropna=False)
+            .size()
+            .reset_index(name="Count")
+        )
+        cat_reason_summary["Category"] = cat_reason_summary["Category"].fillna("Unspecified")
+        cat_reason_summary["Reason"] = cat_reason_summary["Reason"].fillna("Unspecified")
 
-        cat_bars = alt.Chart(cat_reason_summary).mark_bar(color="#16a34a").encode(
+        cat_totals = (
+            cat_reason_summary.groupby("Category", as_index=False)["Count"]
+            .sum()
+            .sort_values("Count", ascending=False)
+            .rename(columns={"Count": "CategoryTotal"})
+        )
+
+        cat_reason_summary = cat_reason_summary.merge(cat_totals, on="Category", how="left")
+        cat_reason_summary = cat_reason_summary.sort_values(["CategoryTotal", "Count"], ascending=[False, False])
+
+        category_sort = cat_totals["Category"].tolist()
+
+        cat_bars = alt.Chart(cat_reason_summary).mark_bar().encode(
             x=alt.X("Count:Q", title="Case Count"),
-            y=alt.Y("Category:N", title="Category", sort="-x"),
-            color=alt.Color("Category:N", title="Category", legend=None),
-            tooltip=["Category", "Count"],
+            y=alt.Y("Category:N", title="Category", sort=category_sort),
+            color=alt.Color("Reason:N", title="Reason"),
+            order=alt.Order("Count:Q", sort="descending"),
+            tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=","), alt.Tooltip("CategoryTotal:Q", format=",")],
         )
-        cat_labels = alt.Chart(cat_reason_summary).mark_text(dx=3, fontSize=10).encode(
-            y=alt.Y("Category:N", sort="-x"),
-            text=alt.Text("Count:Q", format=","),
+
+        cat_labels = alt.Chart(cat_totals).mark_text(dx=5, color="#166534", fontSize=10).encode(
+            x=alt.X("CategoryTotal:Q"),
+            y=alt.Y("Category:N", sort=category_sort),
+            text=alt.Text("CategoryTotal:Q", format=","),
         )
+
         cat_chart = alt.layer(cat_bars, cat_labels).properties(height=360)
-        st.caption("Cases by Category")
+        st.caption("Cases by Category and Reason")
         st.altair_chart(cat_chart, use_container_width=True)
     else:
         st.info("No case category data available for the selected period")
-
-st.subheader("Daily Breakdown")
-daily_display = daily.copy()
-if len(daily_display) > 0:
-    daily_display["Date"] = daily_display["Date"].dt.date
-    daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
-
-daily_display = daily_display.rename(
-    columns={
-        "Date": "Date",
-        "Emails_Received": "📧 Received",
-        "Items_Handled": "✓ Handled",
-        "Available_Hours": "⏰ Hours",
-    }
-)
-st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
-
 
 st.markdown("---")
 with st.expander("Data Quality", expanded=False):
@@ -408,3 +412,4 @@ with st.expander("Data Quality", expanded=False):
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
     dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")
     dq3.metric("Invalid Item Close Timestamps", f"{items_invalid_close:,}")
+

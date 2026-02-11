@@ -260,7 +260,6 @@ c5.metric("Available Hours", f"{available_hours:.1f}")
 c6.metric("Utilisation", f"{util:.1%}")
 
 st.markdown("---")
-st.subheader("Daily Emails Received vs Items Handled vs Availability")
 
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
 daily_received = daily_received.rename(columns={"Date_Opened": "Date"})
@@ -287,70 +286,6 @@ if len(daily) > 0:
     daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
     daily = daily.sort_values("Date").reset_index(drop=True)
     daily["DateLabel"] = daily["Date"].dt.strftime("%a %d %b")
-    date_order = daily["DateLabel"].tolist()
-
-    count_long = daily.melt(
-        id_vars=["Date", "DateLabel"],
-        value_vars=["Emails_Received", "Items_Handled"],
-        var_name="Metric",
-        value_name="Count",
-    )
-    count_long["Metric"] = count_long["Metric"].replace(
-        {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
-    )
-
-    count_lines = alt.Chart(count_long).mark_line(point=True, strokeWidth=3).encode(
-        x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
-        y=alt.Y("Count:Q", title="Email / Item Count"),
-        color=alt.Color(
-            "Metric:N",
-            title="Legend",
-            scale=alt.Scale(
-                domain=["Emails Received", "Items Handled"],
-                range=["#15803d", "#22c55e"],
-            ),
-            legend=alt.Legend(orient="top"),
-        ),
-        tooltip=[
-            alt.Tooltip("Date:T", format="%a %d %b"),
-            alt.Tooltip("Metric:N"),
-            alt.Tooltip("Count:Q", format=","),
-        ],
-    )
-    count_labels = alt.Chart(count_long).mark_text(dy=-10, fontSize=11).encode(
-        x=alt.X("DateLabel:O", sort=date_order),
-        y=alt.Y("Count:Q"),
-        text=alt.Text("Count:Q", format=","),
-        color=alt.Color(
-            "Metric:N",
-            scale=alt.Scale(
-                domain=["Emails Received", "Items Handled"],
-                range=["#15803d", "#22c55e"],
-            ),
-            legend=None,
-        ),
-    )
-    count_chart = alt.layer(count_lines, count_labels).properties(height=460)
-
-    availability_bars = alt.Chart(daily).mark_bar(color="#bbf7d0", opacity=0.85).encode(
-        x=alt.X("DateLabel:O", title="Date", sort=date_order, axis=alt.Axis(labelAngle=-35)),
-        y=alt.Y("Available_Hours:Q", title="Available Hours"),
-        tooltip=[
-            alt.Tooltip("Date:T", format="%a %d %b"),
-            alt.Tooltip("Available_Hours:Q", format=".1f"),
-        ],
-    )
-    availability_labels = alt.Chart(daily).mark_text(dy=-10, color="#166534", fontSize=11).encode(
-        x=alt.X("DateLabel:O", sort=date_order),
-        y=alt.Y("Available_Hours:Q"),
-        text=alt.Text("Available_Hours:Q", format=".1f"),
-    )
-    availability_chart = alt.layer(availability_bars, availability_labels).properties(height=260)
-
-    st.altair_chart(count_chart, use_container_width=True)
-    st.altair_chart(availability_chart, use_container_width=True)
-else:
-    st.warning("No data available for the selected date range")
 
 st.subheader("Day-of-Week Pattern")
 if len(daily) > 0:

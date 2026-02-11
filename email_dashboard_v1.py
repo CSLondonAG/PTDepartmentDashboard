@@ -6,7 +6,7 @@ from pathlib import Path
 st.set_page_config(layout="wide")
 BASE = Path(__file__).parent
 
-EMAIL_REC_FILE = "Email_Received_PT.csv"
+EMAIL_REC_FILE = "EmailReceivedPT.csv"
 PRES_FILE  = "PresencePT.csv"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 
@@ -240,3 +240,4 @@ st.dataframe(
     use_container_width=True,
     hide_index=True
 )
+

@@ -298,9 +298,13 @@ if len(daily) > 0:
         .reset_index()
     )
     dow["DoW"] = pd.Categorical(dow["DoW"], categories=ordered_dow, ordered=True)
+    dow["DoWShort"] = dow["DoW"].astype(str).str.slice(0, 3)
+
+    color_domain = ["Emails Received", "Items Handled", "Available Hours"]
+    color_range = ["#15803d", "#22c55e", "#0f766e"]
 
     dow_counts_long = dow.melt(
-        id_vars="DoW",
+        id_vars=["DoW", "DoWShort"],
         value_vars=["Emails_Received", "Items_Handled"],
         var_name="Metric",
         value_name="AverageCount",
@@ -310,39 +314,38 @@ if len(daily) > 0:
     )
 
     dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
-        x=alt.X("DoW:O", title="Day of Week", sort=ordered_dow),
-        y=alt.Y("AverageCount:Q", title="Average Count", axis=alt.Axis(orient="left")),
-        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(range=["#15803d", "#22c55e", "#0f766e"])),
+        x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(), axis=alt.Axis(labelAngle=0, labelPadding=6)),
+        y=alt.Y("AverageCount:Q", title="Average Count", axis=alt.Axis(orient="left", format=".0f")),
+        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range)),
         xOffset="Metric:N",
-        tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=".1f")],
+        tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
     )
     dow_bar_labels = alt.Chart(dow_counts_long).mark_text(dy=-8, fontSize=10).encode(
-        x=alt.X("DoW:O", sort=ordered_dow),
+        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("AverageCount:Q"),
         xOffset="Metric:N",
-        text=alt.Text("AverageCount:Q", format=".1f"),
-        color=alt.Color("Metric:N", scale=alt.Scale(range=["#15803d", "#22c55e", "#0f766e"]), legend=None),
+        text=alt.Text("AverageCount:Q", format=",.0f"),
+        color=alt.Color("Metric:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None),
     )
 
     dow_hours = dow.copy()
-    dow_hours["Metric"] = "Available Hours"
-    dow_hours_line = alt.Chart(dow_hours).mark_line(point=True, strokeWidth=3).encode(
-        x=alt.X("DoW:O", sort=ordered_dow),
-        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right")),
-        color=alt.Color(
-            "Metric:N",
-            title="Legend",
-            scale=alt.Scale(domain=["Emails Received", "Items Handled", "Available Hours"], range=["#15803d", "#22c55e", "#0f766e"]),
-        ),
+    dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0f766e", strokeWidth=3).encode(
+        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right", format=".1f")),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
     )
     dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0f766e", fontSize=10).encode(
-        x=alt.X("DoW:O", sort=ordered_dow),
+        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("Available_Hours:Q"),
         text=alt.Text("Available_Hours:Q", format=".1f"),
     )
 
-    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).resolve_scale(y="independent").properties(height=420)
+    legend_source = pd.DataFrame({"Metric": color_domain, "x": [0, 0, 0], "y": [0, 0, 0]})
+    legend_layer = alt.Chart(legend_source).mark_point(opacity=0).encode(
+        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range))
+    )
+
+    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer).resolve_scale(y="independent").properties(height=420)
     st.altair_chart(dow_chart, use_container_width=True)
 
 st.subheader("SLA Performance")

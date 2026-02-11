@@ -9,6 +9,7 @@ BASE = Path(__file__).parent
 RESP_FILE  = "Responded PT.csv"
 ITEMS_FILE = "ItemsPT.csv"
 PRES_FILE  = "PresencePT.csv"
+EMAIL_REC_FILE = "Email_Received_PT.csv"
 
 EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
@@ -25,8 +26,9 @@ def load(path):
 resp  = load(BASE / RESP_FILE)
 items = load(BASE / ITEMS_FILE)
 pres  = load(BASE / PRES_FILE)
+email_rec = load(BASE / EMAIL_REC_FILE)
 
-for df in (resp, items, pres):
+for df in (resp, items, pres, email_rec):
     df.columns = df.columns.str.strip()
 
 
@@ -61,6 +63,12 @@ items["AssignDT"] = pd.to_datetime(
 )
 
 items["Date"] = items["AssignDT"].dt.date
+
+
+# ---------------- EMAIL RECEIVED ----------------
+
+email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
+email_rec["Date"] = email_rec["OpenedDT"].dt.date
 
 
 # ---------------- PRESENCE ----------------
@@ -101,6 +109,7 @@ start, end = st.date_input(
 
 resp  = resp[(resp["Date"] >= start) & (resp["Date"] <= end)]
 items = items[(items["Date"] >= start) & (items["Date"] <= end)]
+email_rec = email_rec[(email_rec["Date"] >= start) & (email_rec["Date"] <= end)]
 
 start_ts = pd.Timestamp(start)
 end_ts = pd.Timestamp(end) + pd.Timedelta(days=1)
@@ -159,8 +168,8 @@ c6.metric("Utilisation", f"{util:.1%}")
 st.markdown("---")
 st.subheader("Daily Emails Received vs Items Handled vs Availability")
 
-# Emails received (from resp data - single instances only)
-daily = resp.groupby("Date").size().reset_index(name="Emails_Received")
+# Emails received (from email_rec data - count of Date/Time Opened)
+daily = email_rec.groupby("Date").size().reset_index(name="Emails_Received")
 
 # Items handled (from items data - all email channel items)
 items_daily = items.groupby("Date").size().reset_index(name="Items_Handled")

@@ -346,65 +346,131 @@ if len(daily) > 0:
     st.altair_chart(dow_chart, use_container_width=True)
 
 st.subheader("SLA Performance")
-col_a, col_b = st.columns(2)
+closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
+    x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
+    y=alt.Y("Count:Q", title="Closed Email Count"),
+    tooltip=["Bucket", "Count"],
+)
+closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
+    x=alt.X("Bucket:N", sort=aging_labels),
+    y=alt.Y("Count:Q"),
+    text=alt.Text("Count:Q", format=","),
+)
+closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=320)
+st.caption("Closed Emails (response-time buckets)")
+st.altair_chart(closed_aging_chart, use_container_width=True)
 
-with col_a:
-    closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
-        x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
-        y=alt.Y("Count:Q", title="Closed Email Count"),
-        tooltip=["Bucket", "Count"],
+st.subheader("Case Category & Reason Breakdown")
+if len(case_cat_period) > 0:
+    cat_reason_summary = (
+        case_cat_period.groupby(["Category", "Reason"], dropna=False)
+        .size()
+        .reset_index(name="Count")
     )
-    closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
-        x=alt.X("Bucket:N", sort=aging_labels),
-        y=alt.Y("Count:Q"),
-        text=alt.Text("Count:Q", format=","),
+    cat_reason_summary["Category"] = cat_reason_summary["Category"].fillna("Unspecified")
+    cat_reason_summary["Reason"] = cat_reason_summary["Reason"].fillna("Unspecified")
+
+    cat_totals = (
+        cat_reason_summary.groupby("Category", as_index=False)["Count"]
+        .sum()
+        .sort_values("Count", ascending=False)
+        .rename(columns={"Count": "CategoryTotal"})
     )
-    closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=360)
-    st.caption("Closed Emails (response-time buckets)")
-    st.altair_chart(closed_aging_chart, use_container_width=True)
 
-with col_b:
-    # Category/Reason breakdown
-    if len(case_cat_period) > 0:
-        cat_reason_summary = (
-            case_cat_period.groupby(["Category", "Reason"], dropna=False)
-            .size()
-            .reset_index(name="Count")
+    category_count = int(cat_totals.shape[0])
+    max_categories = min(30, category_count)
+
+    controls_col1, controls_col2 = st.columns(2)
+    with controls_col1:
+        top_categories = st.slider(
+            "Top categories to display",
+            min_value=1,
+            max_value=max_categories,
+            value=min(12, max_categories),
+            step=1,
+            help="Shows the largest categories and keeps the chart readable for high-volume datasets.",
         )
-        cat_reason_summary["Category"] = cat_reason_summary["Category"].fillna("Unspecified")
-        cat_reason_summary["Reason"] = cat_reason_summary["Reason"].fillna("Unspecified")
-
-        cat_totals = (
-            cat_reason_summary.groupby("Category", as_index=False)["Count"]
-            .sum()
-            .sort_values("Count", ascending=False)
-            .rename(columns={"Count": "CategoryTotal"})
-        )
-
-        cat_reason_summary = cat_reason_summary.merge(cat_totals, on="Category", how="left")
-        cat_reason_summary = cat_reason_summary.sort_values(["CategoryTotal", "Count"], ascending=[False, False])
-
-        category_sort = cat_totals["Category"].tolist()
-
-        cat_bars = alt.Chart(cat_reason_summary).mark_bar().encode(
-            x=alt.X("Count:Q", title="Case Count"),
-            y=alt.Y("Category:N", title="Category", sort=category_sort),
-            color=alt.Color("Reason:N", title="Reason"),
-            order=alt.Order("Count:Q", sort="descending"),
-            tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=","), alt.Tooltip("CategoryTotal:Q", format=",")],
+    with controls_col2:
+        top_reasons = st.slider(
+            "Top reasons per category",
+            min_value=1,
+            max_value=12,
+            value=6,
+            step=1,
+            help="Additional reasons are grouped into 'Other'.",
         )
 
-        cat_labels = alt.Chart(cat_totals).mark_text(dx=5, color="#166534", fontSize=10).encode(
-            x=alt.X("CategoryTotal:Q"),
-            y=alt.Y("Category:N", sort=category_sort),
-            text=alt.Text("CategoryTotal:Q", format=","),
-        )
+    selected_categories = cat_totals.head(top_categories)["Category"].tolist()
+    filtered = cat_reason_summary[cat_reason_summary["Category"].isin(selected_categories)].copy()
 
-        cat_chart = alt.layer(cat_bars, cat_labels).properties(height=360)
-        st.caption("Cases by Category and Reason")
-        st.altair_chart(cat_chart, use_container_width=True)
-    else:
-        st.info("No case category data available for the selected period")
+    filtered = filtered.sort_values(["Category", "Count"], ascending=[True, False])
+    filtered["ReasonRank"] = filtered.groupby("Category")["Count"].rank(method="first", ascending=False)
+    filtered["ReasonCollapsed"] = np.where(filtered["ReasonRank"] <= top_reasons, filtered["Reason"], "Other")
+
+    chart_data = (
+        filtered.groupby(["Category", "ReasonCollapsed"], as_index=False)["Count"]
+        .sum()
+        .rename(columns={"ReasonCollapsed": "Reason"})
+    )
+
+    category_sort = cat_totals[cat_totals["Category"].isin(selected_categories)]["Category"].tolist()
+    reason_totals = chart_data.groupby("Reason", as_index=False)["Count"].sum().sort_values("Count", ascending=False)
+    reason_sort = reason_totals["Reason"].tolist()
+
+    chart_data = chart_data.merge(
+        chart_data.groupby("Category", as_index=False)["Count"].sum().rename(columns={"Count": "CategoryTotal"}),
+        on="Category",
+        how="left",
+    )
+
+    cat_bars = alt.Chart(chart_data).mark_bar().encode(
+        x=alt.X("Count:Q", title="Case Count"),
+        y=alt.Y("Category:N", title="Category", sort=category_sort),
+        color=alt.Color("Reason:N", title="Reason", sort=reason_sort),
+        order=alt.Order("Count:Q", sort="descending"),
+        tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=","), alt.Tooltip("CategoryTotal:Q", format=",")],
+    )
+
+    cat_labels = alt.Chart(
+        chart_data[["Category", "CategoryTotal"]].drop_duplicates()
+    ).mark_text(dx=6, color="#166534", fontSize=10).encode(
+        x=alt.X("CategoryTotal:Q"),
+        y=alt.Y("Category:N", sort=category_sort),
+        text=alt.Text("CategoryTotal:Q", format=","),
+    )
+
+    stacked_chart = alt.layer(cat_bars, cat_labels).properties(height=max(360, len(category_sort) * 26))
+    st.caption("Top categories with reason-level distribution (less frequent reasons grouped as 'Other').")
+    st.altair_chart(stacked_chart, use_container_width=True)
+
+    heatmap_data = chart_data.copy()
+    heatmap = alt.Chart(heatmap_data).mark_rect().encode(
+        x=alt.X("Reason:N", sort=reason_sort, title="Reason"),
+        y=alt.Y("Category:N", sort=category_sort, title="Category"),
+        color=alt.Color("Count:Q", title="Cases", scale=alt.Scale(scheme="greens")),
+        tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=",")],
+    ).properties(height=max(320, len(category_sort) * 24))
+    st.caption("Heatmap view for scanning dense category/reason combinations.")
+    st.altair_chart(heatmap, use_container_width=True)
+else:
+    st.info("No case category data available for the selected period")
+
+st.subheader("Daily Breakdown")
+daily_display = daily.copy()
+if len(daily_display) > 0:
+    daily_display["Date"] = daily_display["Date"].dt.date
+    daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
+
+daily_display = daily_display.rename(
+    columns={
+        "Date": "Date",
+        "Emails_Received": "📧 Received",
+        "Items_Handled": "✓ Handled",
+        "Available_Hours": "⏰ Hours",
+    }
+)
+st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
+
 
 st.markdown("---")
 with st.expander("Data Quality", expanded=False):
@@ -412,4 +478,3 @@ with st.expander("Data Quality", expanded=False):
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
     dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")
     dq3.metric("Invalid Item Close Timestamps", f"{items_invalid_close:,}")
-

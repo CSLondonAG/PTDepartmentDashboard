@@ -9,7 +9,7 @@ BASE = Path(__file__).parent
 RESP_FILE  = "Responded PT.csv"
 ITEMS_FILE = "ItemsPT.csv"
 PRES_FILE  = "PresencePT.csv"
-EMAIL_REC_FILE = "Email_Received_PT.csv"
+EMAIL_REC_FILE = "EmailReceivedPT.csv"
 
 EMAIL_CHANNEL = "casesChannel"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}

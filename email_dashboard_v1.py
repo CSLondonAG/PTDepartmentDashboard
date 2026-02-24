@@ -198,6 +198,16 @@ with st.expander("Filters"):
     milestone_options = sorted(email_rec["Milestone"].dropna().unique().tolist())
     selected_milestones = st.multiselect("Milestone", milestone_options, default=milestone_options)
 
+# Count non-default filters for indicator
+_active_filters = sum([
+    len(selected_queues) < len(queue_options),
+    len(selected_origins) < len(origin_options),
+    len(selected_priorities) < len(priority_options),
+    len(selected_milestones) < len(milestone_options),
+])
+if _active_filters > 0:
+    st.caption(f"⚠ {_active_filters} filter{'s' if _active_filters > 1 else ''} active — results are scoped.")
+
 
 # ---------------- FILTERED DATA ----------------
 
@@ -327,7 +337,7 @@ if len(daily) > 0:
     dow["DoWShort"] = dow["DoW"].astype(str).str.slice(0, 3)
 
     color_domain = ["Emails Received", "Items Handled", "Available Hours"]
-    color_range = ["#15803d", "#22c55e", "#0f766e"]
+    color_range = ["#15803d", "#86efac", "#0d9488"]
 
     dow_counts_long = dow.melt(
         id_vars=["DoW", "DoWShort"],
@@ -355,12 +365,12 @@ if len(daily) > 0:
     )
 
     dow_hours = dow.copy()
-    dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0f766e", strokeWidth=3).encode(
+    dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right", format=".1f")),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
     )
-    dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0f766e", fontSize=10).encode(
+    dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("Available_Hours:Q"),
         text=alt.Text("Available_Hours:Q", format=".1f"),
@@ -375,19 +385,19 @@ if len(daily) > 0:
     st.altair_chart(dow_chart, use_container_width=True)
 
 st.subheader("SLA Performance")
-closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#22c55e").encode(
+closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#15803d").encode(
     x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
     y=alt.Y("Count:Q", title="Closed Email Count"),
     tooltip=["Bucket", "Count"],
 )
-closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#166534", fontSize=11).encode(
+closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#15803d", fontSize=11).encode(
     x=alt.X("Bucket:N", sort=aging_labels),
     y=alt.Y("Count:Q"),
     text=alt.Text("Count:Q", format=","),
 )
 closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=320)
-st.caption("Closed Emails (response-time buckets)")
 st.altair_chart(closed_aging_chart, use_container_width=True)
+st.caption("Closed emails grouped by business-hour response time.")
 
 st.subheader("Case Category & Reason Breakdown")
 if len(case_cat_period) > 0:
@@ -469,8 +479,8 @@ if len(case_cat_period) > 0:
     )
 
     stacked_chart = alt.layer(cat_bars, cat_labels).properties(height=max(360, len(category_sort) * 26))
-    st.caption("Top categories with reason-level distribution (less frequent reasons grouped as 'Other').")
     st.altair_chart(stacked_chart, use_container_width=True)
+    st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
 
     heatmap_data = chart_data.copy()
     heatmap = alt.Chart(heatmap_data).mark_rect().encode(
@@ -479,8 +489,8 @@ if len(case_cat_period) > 0:
         color=alt.Color("Count:Q", title="Cases", scale=alt.Scale(scheme="greens")),
         tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=",")],
     ).properties(height=max(320, len(category_sort) * 24))
-    st.caption("Heatmap view for scanning dense category/reason combinations.")
     st.altair_chart(heatmap, use_container_width=True)
+    st.caption("Heatmap view for scanning dense category/reason combinations.")
 else:
     st.info("No case category data available for the selected period")
 
@@ -493,15 +503,17 @@ if len(daily_display) > 0:
 daily_display = daily_display.rename(
     columns={
         "Date": "Date",
-        "Emails_Received": "📧 Received",
-        "Items_Handled": "✓ Handled",
-        "Available_Hours": "⏰ Hours",
+        "Emails_Received": "Received",
+        "Items_Handled": "Handled",
+        "Available_Hours": "Avail. Hours",
     }
 )
 st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
 
 
+st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
 with st.expander("Data Quality", expanded=False):
+    st.markdown("<p style='color:#6b7280;font-size:0.82rem;margin-bottom:8px;'>Rows excluded due to unparseable timestamps — review source data if counts are high.</p>", unsafe_allow_html=True)
     dq1, dq2, dq3 = st.columns(3)
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
     dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")

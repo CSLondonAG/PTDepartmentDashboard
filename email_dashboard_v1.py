@@ -366,6 +366,13 @@ if len(daily) > 0:
         {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
     )
 
+    # Scale hours to the same domain as counts so we can share one Y axis.
+    # The text labels already show the real hour values, so no information is lost.
+    count_max = dow_counts_long["AverageCount"].max()
+    hours_max = dow["Available_Hours"].max()
+    scale_factor = count_max / hours_max if hours_max > 0 else 1
+    dow["Available_Hours_Scaled"] = dow["Available_Hours"] * scale_factor
+
     dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
         x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(), axis=alt.Axis(labelAngle=0, labelPadding=6)),
         y=alt.Y("AverageCount:Q", title="Avg Count", axis=alt.Axis(orient="left", format=".0f", titlePadding=12)),
@@ -382,14 +389,16 @@ if len(daily) > 0:
     )
 
     dow_hours = dow.copy()
-    dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3).encode(
+    dow_hours_line = alt.Chart(dow_hours).mark_line(
+        point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3
+    ).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours:Q", axis=None),
+        y=alt.Y("Available_Hours_Scaled:Q", axis=None),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
     )
     dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours:Q"),
+        y=alt.Y("Available_Hours_Scaled:Q", axis=None),
         text=alt.Text("Available_Hours:Q", format=".1f"),
     )
 
@@ -400,7 +409,6 @@ if len(daily) > 0:
 
     dow_chart = (
         alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer)
-        .resolve_scale(y="independent")
         .properties(height=340)
     )
     st.altair_chart(dow_chart, use_container_width=True)

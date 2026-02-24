@@ -368,7 +368,7 @@ if len(daily) > 0:
 
     dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
         x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(), axis=alt.Axis(labelAngle=0, labelPadding=6)),
-        y=alt.Y("AverageCount:Q", title="Average Count", axis=alt.Axis(orient="left", format=".0f")),
+        y=alt.Y("AverageCount:Q", title="Avg Count", axis=alt.Axis(orient="left", format=".0f", titlePadding=12)),
         color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range)),
         xOffset="Metric:N",
         tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
@@ -384,7 +384,7 @@ if len(daily) > 0:
     dow_hours = dow.copy()
     dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours:Q", title="Average Available Hours", axis=alt.Axis(orient="right", format=".1f")),
+        y=alt.Y("Available_Hours:Q", title="Avail. Hours", axis=alt.Axis(orient="right", format=".1f", titlePadding=16)),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f")],
     )
     dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(

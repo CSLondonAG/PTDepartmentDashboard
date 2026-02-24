@@ -19,9 +19,28 @@ BUSINESS_END_HOUR = 22
 st.markdown(
     """
     <style>
-      .stApp {background-color: #f7fff9;}
-      div[data-testid="stMetricValue"] {color: #166534;}
-      .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {color: #166534;}
+      /* ── Base ── */
+      .stApp {background-color: #f8fafc;}
+
+      /* ── Typography hierarchy ── */
+      .stMarkdown h1 {color: #111827; font-size: 1.75rem; font-weight: 700; margin-bottom: 2px;}
+      .stMarkdown h2 {color: #15803d; font-size: 1.1rem; font-weight: 600; margin-top: 2rem;}
+      .stMarkdown h3 {color: #374151; font-size: 0.95rem; font-weight: 500;}
+
+      /* ── Metric tiers ── */
+      div[data-testid="stMetricValue"] {color: #15803d; font-size: 1.5rem; font-weight: 700;}
+      div[data-testid="stMetricLabel"] {color: #6b7280; font-size: 0.78rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em;}
+      div[data-testid="stMetric"] {background: #ffffff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #e5e7eb;}
+
+      /* ── Button ── */
+      .stButton > button {background-color: #15803d; color: white; border-radius: 8px; border: none; padding: 6px 16px; font-weight: 500;}
+      .stButton > button:hover {background-color: #166534; color: white; border: none;}
+
+      /* ── Focus ring ── */
+      *:focus-visible {outline: 2px solid #15803d !important; outline-offset: 2px !important;}
+
+      /* ── Remove default Streamlit divider weight ── */
+      hr {border-color: #e5e7eb; border-width: 1px 0 0 0; margin: 1.5rem 0;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -142,11 +161,12 @@ pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATU
 
 # ---------------- CONTROLS ----------------
 
-st.title("Email Department Performance")
-
-_, refresh_col = st.columns([4, 1])
+title_col, refresh_col = st.columns([5, 1])
+with title_col:
+    st.title("Email Department Performance")
 with refresh_col:
-    if st.button("🔄 Refresh Data", use_container_width=True):
+    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+    if st.button("Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -246,17 +266,23 @@ else:
 
 # ---------------- DISPLAY ----------------
 
-st.markdown(f"**Period:** {start} to {end}")
+st.markdown(
+    f"<p style='color:#6b7280;margin-top:-8px;margin-bottom:20px;font-size:0.9rem;'>{start} — {end}</p>",
+    unsafe_allow_html=True,
+)
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+# ── Primary metrics (top tier) ──
+c1, c2, c3 = st.columns(3)
 c1.metric("Emails Received", f"{total_received:,}")
 c2.metric("Work Items Handled", f"{total_handled:,}")
 c3.metric("Avg Response Time (BH)", hm(avg_art))
-c4.metric("Avg Handle Time", mmss(avg_aht))
-c5.metric("Available Hours", f"{available_hours:.1f}")
-c6.metric("Utilisation", f"{util:.1%}")
 
-st.markdown("---")
+# ── Secondary metrics (contextual) ──
+st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+s1, s2, s3 = st.columns(3)
+s1.metric("Avg Handle Time", mmss(avg_aht))
+s2.metric("Available Hours", f"{available_hours:.1f}")
+s3.metric("Utilisation", f"{util:.1%}")
 
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
 daily_received = daily_received.rename(columns={"Date_Opened": "Date"})
@@ -475,7 +501,6 @@ daily_display = daily_display.rename(
 st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
 
 
-st.markdown("---")
 with st.expander("Data Quality", expanded=False):
     dq1, dq2, dq3 = st.columns(3)
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")

@@ -33,11 +33,27 @@ st.markdown(
       div[data-testid="stMetric"] {background: #ffffff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #e5e7eb;}
 
       /* ── Button ── */
-      .stButton > button {background-color: #15803d; color: white; border-radius: 8px; border: none; padding: 6px 16px; font-weight: 500;}
+      .stButton > button {background-color: #15803d; color: white; border-radius: 8px; border: none; padding: 6px 16px; font-weight: 500; transition: background-color 0.15s ease;}
       .stButton > button:hover {background-color: #166534; color: white; border: none;}
+      .stButton > button:active {background-color: #14532d; transform: scale(0.98); transition: transform 0.08s ease;}
 
       /* ── Focus ring ── */
       *:focus-visible {outline: 2px solid #15803d !important; outline-offset: 2px !important;}
+
+      /* ── Chart containers ── */
+      div[data-testid="stVegaLiteChart"] {border-radius: 12px; overflow: hidden;}
+
+      /* ── Table refinement ── */
+      div[data-testid="stDataFrame"] {border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;}
+
+      /* ── Expander ── */
+      div[data-testid="stExpander"] {border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff;}
+
+      /* ── Info/empty state ── */
+      div[data-testid="stAlert"] {border-radius: 8px; border-left: 3px solid #15803d;}
+
+      /* ── Spinner ── */
+      div[data-testid="stSpinner"] > div {color: #15803d;}
 
       /* ── Remove default Streamlit divider weight ── */
       hr {border-color: #e5e7eb; border-width: 1px 0 0 0; margin: 1.5rem 0;}
@@ -115,10 +131,11 @@ def hm(sec):
 
 # ---------------- LOAD & PREP ----------------
 
-email_rec = load(BASE / EMAIL_REC_FILE)
-items = load(BASE / ITEMS_FILE)
-pres = load(BASE / PRES_FILE)
-case_cat = load(BASE / CASE_CAT_FILE)
+with st.spinner("Loading data…"):
+    email_rec = load(BASE / EMAIL_REC_FILE)
+    items = load(BASE / ITEMS_FILE)
+    pres = load(BASE / PRES_FILE)
+    case_cat = load(BASE / CASE_CAT_FILE)
 
 for df in (email_rec, items, pres, case_cat):
     df.columns = df.columns.str.strip()
@@ -381,23 +398,39 @@ if len(daily) > 0:
         color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range))
     )
 
-    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer).resolve_scale(y="independent").properties(height=420)
+    dow_chart = (
+        alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer)
+        .resolve_scale(y="independent")
+        .properties(height=340)
+        .configure_tooltip(theme="dark")
+        .configure_view(strokeWidth=0)
+    )
     st.altair_chart(dow_chart, use_container_width=True)
+else:
+    st.info("No daily data available for the selected date range. Try adjusting the date picker above.")
 
 st.subheader("SLA Performance")
-closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#15803d").encode(
-    x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
-    y=alt.Y("Count:Q", title="Closed Email Count"),
-    tooltip=["Bucket", "Count"],
-)
-closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#15803d", fontSize=11).encode(
-    x=alt.X("Bucket:N", sort=aging_labels),
-    y=alt.Y("Count:Q"),
-    text=alt.Text("Count:Q", format=","),
-)
-closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=320)
-st.altair_chart(closed_aging_chart, use_container_width=True)
-st.caption("Closed emails grouped by business-hour response time.")
+if closed_aging_summary["Count"].sum() > 0:
+    closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+        x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
+        y=alt.Y("Count:Q", title="Closed Email Count"),
+        tooltip=["Bucket", "Count"],
+    )
+    closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#15803d", fontSize=11).encode(
+        x=alt.X("Bucket:N", sort=aging_labels),
+        y=alt.Y("Count:Q"),
+        text=alt.Text("Count:Q", format=","),
+    )
+    closed_aging_chart = (
+        alt.layer(closed_aging_bars, closed_aging_labels)
+        .properties(height=340)
+        .configure_tooltip(theme="dark")
+        .configure_view(strokeWidth=0)
+    )
+    st.altair_chart(closed_aging_chart, use_container_width=True)
+    st.caption("Closed emails grouped by business-hour response time.")
+else:
+    st.info("No closed emails with response time data for the selected period. Adjust the date range or check that completion timestamps are present.")
 
 st.subheader("Case Category & Reason Breakdown")
 if len(case_cat_period) > 0:
@@ -472,27 +505,39 @@ if len(case_cat_period) > 0:
 
     cat_labels = alt.Chart(
         chart_data[["Category", "CategoryTotal"]].drop_duplicates()
-    ).mark_text(dx=6, color="#166534", fontSize=10).encode(
+    ).mark_text(dx=6, color="#15803d", fontSize=10).encode(
         x=alt.X("CategoryTotal:Q"),
         y=alt.Y("Category:N", sort=category_sort),
         text=alt.Text("CategoryTotal:Q", format=","),
     )
 
-    stacked_chart = alt.layer(cat_bars, cat_labels).properties(height=max(360, len(category_sort) * 26))
+    stacked_chart = (
+        alt.layer(cat_bars, cat_labels)
+        .properties(height=min(max(340, len(category_sort) * 26), 600))
+        .configure_tooltip(theme="dark")
+        .configure_view(strokeWidth=0)
+    )
     st.altair_chart(stacked_chart, use_container_width=True)
     st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
 
     heatmap_data = chart_data.copy()
-    heatmap = alt.Chart(heatmap_data).mark_rect().encode(
-        x=alt.X("Reason:N", sort=reason_sort, title="Reason"),
-        y=alt.Y("Category:N", sort=category_sort, title="Category"),
-        color=alt.Color("Count:Q", title="Cases", scale=alt.Scale(scheme="greens")),
-        tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=",")],
-    ).properties(height=max(320, len(category_sort) * 24))
+    heatmap = (
+        alt.Chart(heatmap_data)
+        .mark_rect()
+        .encode(
+            x=alt.X("Reason:N", sort=reason_sort, title="Reason"),
+            y=alt.Y("Category:N", sort=category_sort, title="Category"),
+            color=alt.Color("Count:Q", title="Cases", scale=alt.Scale(scheme="greens")),
+            tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=",")],
+        )
+        .properties(height=min(max(340, len(category_sort) * 24), 600))
+        .configure_tooltip(theme="dark")
+        .configure_view(strokeWidth=0)
+    )
     st.altair_chart(heatmap, use_container_width=True)
     st.caption("Heatmap view for scanning dense category/reason combinations.")
 else:
-    st.info("No case category data available for the selected period")
+    st.info("No case category data available for the selected period. Try widening the date range.")
 
 st.subheader("Daily Breakdown")
 daily_display = daily.copy()
@@ -500,15 +545,17 @@ if len(daily_display) > 0:
     daily_display["Date"] = daily_display["Date"].dt.date
     daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
 
-daily_display = daily_display.rename(
-    columns={
-        "Date": "Date",
-        "Emails_Received": "Received",
-        "Items_Handled": "Handled",
-        "Available_Hours": "Avail. Hours",
-    }
-)
-st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
+    daily_display = daily_display.rename(
+        columns={
+            "Date": "Date",
+            "Emails_Received": "Received",
+            "Items_Handled": "Handled",
+            "Available_Hours": "Avail. Hours",
+        }
+    )
+    st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
+else:
+    st.info("No daily records found for the selected date range.")
 
 
 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)

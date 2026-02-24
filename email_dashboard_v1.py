@@ -402,16 +402,30 @@ if len(daily) > 0:
         text=alt.Text("Available_Hours:Q", format=".1f"),
     )
 
-    legend_source = pd.DataFrame({"Metric": color_domain, "x": [0, 0, 0], "y": [0, 0, 0]})
-    legend_layer = alt.Chart(legend_source).mark_point(opacity=0).encode(
-        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range))
-    )
-
     dow_chart = (
-        alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer)
+        alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels)
         .properties(height=340)
     )
     st.altair_chart(dow_chart, use_container_width=True)
+    st.markdown(
+        """
+        <div style="display:flex;gap:24px;justify-content:center;margin-top:-8px;margin-bottom:8px;">
+            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#15803d;"></span>
+                Emails Received
+            </span>
+            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#86efac;"></span>
+                Items Handled
+            </span>
+            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                <span style="display:inline-block;width:28px;height:3px;background:#0d9488;border-radius:2px;position:relative;top:0px;"></span>
+                Avg Available Hours
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 else:
     st.info("No daily data available for the selected date range. Try adjusting the date picker above.")
 

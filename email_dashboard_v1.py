@@ -384,7 +384,7 @@ if len(daily) > 0:
     dow_hours = dow.copy()
     dow_hours_line = alt.Chart(dow_hours).mark_line(point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours:Q", title=None, axis=alt.Axis(orient="right", format=".1f", labelPadding=8)),
+        y=alt.Y("Available_Hours:Q", axis=None),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
     )
     dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(

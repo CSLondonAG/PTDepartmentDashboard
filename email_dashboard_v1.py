@@ -402,8 +402,6 @@ if len(daily) > 0:
         alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels, legend_layer)
         .resolve_scale(y="independent")
         .properties(height=340)
-        .configure_tooltip(theme="dark")
-        .configure_view(strokeWidth=0)
     )
     st.altair_chart(dow_chart, use_container_width=True)
 else:
@@ -424,8 +422,6 @@ if closed_aging_summary["Count"].sum() > 0:
     closed_aging_chart = (
         alt.layer(closed_aging_bars, closed_aging_labels)
         .properties(height=340)
-        .configure_tooltip(theme="dark")
-        .configure_view(strokeWidth=0)
     )
     st.altair_chart(closed_aging_chart, use_container_width=True)
     st.caption("Closed emails grouped by business-hour response time.")
@@ -514,8 +510,6 @@ if len(case_cat_period) > 0:
     stacked_chart = (
         alt.layer(cat_bars, cat_labels)
         .properties(height=min(max(340, len(category_sort) * 26), 600))
-        .configure_tooltip(theme="dark")
-        .configure_view(strokeWidth=0)
     )
     st.altair_chart(stacked_chart, use_container_width=True)
     st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
@@ -531,8 +525,6 @@ if len(case_cat_period) > 0:
             tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=",")],
         )
         .properties(height=min(max(340, len(category_sort) * 24), 600))
-        .configure_tooltip(theme="dark")
-        .configure_view(strokeWidth=0)
     )
     st.altair_chart(heatmap, use_container_width=True)
     st.caption("Heatmap view for scanning dense category/reason combinations.")

@@ -173,10 +173,6 @@ pres["EndDT"] = pd.to_datetime(
 # Keep FULL presence (do not filter to available only)
 pres = pres.copy()
 
-# Subsets for metrics/charts
-pres_avail = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
-pres_online = pres[~pres["Service Presence Status: Developer Name"].isin(OFFLINE_STATUSES)].copy()
-
 
 # ---------------- CONTROLS ----------------
 
@@ -231,15 +227,30 @@ else:
 
 avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 
-# Available (available statuses only) and Online (all except Offline)
+# Presence subsets (scoped to selected window for agent coverage)
+pres_in_window = pres[(pres["StartDT"] < end_ts) & (pres["EndDT"].fillna(end_ts) > start_ts)].copy()
+
+pres_avail = pres_in_window[pres_in_window["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
+pres_online = pres_in_window[~pres_in_window["Service Presence Status: Developer Name"].isin(OFFLINE_STATUSES)].copy()
+
 available_sec = seconds_in_window(pres_avail, start_ts, end_ts)
 available_hours = available_sec / 3600
 
 online_sec = seconds_in_window(pres_online, start_ts, end_ts)
 online_hours = online_sec / 3600
 
-total_handle_sec = items_period["HandleSec"].sum()
+# Utilisation fix: align numerator to the same agent population present in Presence export.
+# If Presence is missing some agents, handle time from those agents must not be included.
+presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
+items_for_util = items_period[items_period["User: Full Name"].astype(str).isin(presence_agents)].copy()
+
+total_handle_sec = items_for_util["HandleSec"].sum()
 util = (total_handle_sec / online_sec) if online_sec > 0 else 0
+
+# Coverage indicator (internal diagnostic; shown as metric)
+items_agents = set(items_period["User: Full Name"].dropna().astype(str).unique().tolist())
+covered_agents = len(items_agents.intersection(presence_agents))
+coverage = (covered_agents / len(items_agents)) if len(items_agents) > 0 else 0
 
 email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
@@ -272,10 +283,11 @@ c3.metric("Avg Response Time (BH)", hm(avg_art))
 
 # ── Secondary metrics (contextual) ──
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
-s1, s2, s3 = st.columns(3)
+s1, s2, s3, s4 = st.columns(4)
 s1.metric("Avg Handle Time", mmss(avg_aht))
 s2.metric("Online Hours", f"{online_hours:.1f}")
 s3.metric("Utilisation", f"{util:.1%}")
+s4.metric("Presence Coverage", f"{coverage:.0%}")
 
 # Daily counts
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")

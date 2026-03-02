@@ -13,49 +13,35 @@ PRES_FILE = "PresencePT.csv"
 CASE_CAT_FILE = "CaseCatPT.csv"
 
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
+OFFLINE_STATUSES = {"Offline"}  # extend if your export includes other offline-like values
+
 BUSINESS_START_HOUR = 7
 BUSINESS_END_HOUR = 22
 
 st.markdown(
     """
     <style>
-      /* ── Base ── */
       .stApp {background-color: #f8fafc;}
 
-      /* ── Typography hierarchy ── */
       .stMarkdown h1 {color: #111827; font-size: 1.75rem; font-weight: 700; margin-bottom: 2px;}
       .stMarkdown h2 {color: #15803d; font-size: 1.1rem; font-weight: 600; margin-top: 2rem;}
       .stMarkdown h3 {color: #374151; font-size: 0.95rem; font-weight: 500;}
 
-      /* ── Metric tiers ── */
       div[data-testid="stMetricValue"] {color: #15803d; font-size: 1.5rem; font-weight: 700;}
       div[data-testid="stMetricLabel"] {color: #6b7280; font-size: 0.78rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em;}
       div[data-testid="stMetric"] {background: #ffffff; border-radius: 12px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border: 1px solid #e5e7eb;}
 
-      /* ── Button ── */
       .stButton > button {background-color: #15803d; color: white; border-radius: 8px; border: none; padding: 6px 16px; font-weight: 500; transition: background-color 0.15s ease;}
       .stButton > button:hover {background-color: #166534; color: white; border: none;}
       .stButton > button:active {background-color: #14532d; transform: scale(0.98); transition: transform 0.08s ease;}
 
-      /* ── Focus ring ── */
       *:focus-visible {outline: 2px solid #15803d !important; outline-offset: 2px !important;}
 
-      /* ── Chart containers ── */
       div[data-testid="stVegaLiteChart"] {border-radius: 12px; overflow: hidden;}
-
-      /* ── Table refinement ── */
       div[data-testid="stDataFrame"] {border-radius: 8px; overflow: hidden; border: 1px solid #e5e7eb;}
-
-      /* ── Expander ── */
       div[data-testid="stExpander"] {border: 1px solid #e5e7eb; border-radius: 8px; background: #ffffff;}
-
-      /* ── Info/empty state ── */
       div[data-testid="stAlert"] {border-radius: 8px; border-left: 3px solid #15803d;}
-
-      /* ── Spinner ── */
       div[data-testid="stSpinner"] > div {color: #15803d;}
-
-      /* ── Remove default Streamlit divider weight ── */
       hr {border-color: #e5e7eb; border-width: 1px 0 0 0; margin: 1.5rem 0;}
     </style>
     """,
@@ -77,9 +63,7 @@ def load(path):
                 return pd.read_csv(path, encoding="latin-1", low_memory=False)
 
 
-def business_seconds_between(
-    start_dt, end_dt, start_hour=BUSINESS_START_HOUR, end_hour=BUSINESS_END_HOUR
-):
+def business_seconds_between(start_dt, end_dt, start_hour=BUSINESS_START_HOUR, end_hour=BUSINESS_END_HOUR):
     """Business-time seconds between two timestamps, weekends included."""
     if pd.isna(start_dt) or pd.isna(end_dt) or end_dt <= start_dt:
         return np.nan
@@ -131,6 +115,16 @@ def hm(sec):
     return f"{h}h {m:02}m"
 
 
+def seconds_in_window(pres_df: pd.DataFrame, window_start: pd.Timestamp, window_end: pd.Timestamp) -> float:
+    """Sum presence seconds clipped to a window. Treat NaT EndDT as window_end."""
+    if pres_df.empty:
+        return 0.0
+    ends = pres_df["EndDT"].fillna(window_end)
+    intervals = [clip(s, e, window_start, window_end) for s, e in zip(pres_df["StartDT"], ends)]
+    intervals = [x for x in intervals if x]
+    return sum_seconds(intervals)
+
+
 # ---------------- LOAD & PREP ----------------
 
 with st.spinner("Loading data…"):
@@ -142,21 +136,13 @@ with st.spinner("Loading data…"):
 for df in (email_rec, items, pres, case_cat):
     df.columns = df.columns.str.strip()
 
-email_rec["OpenedDT"] = pd.to_datetime(
-    email_rec["Date/Time Opened"], errors="coerce", dayfirst=True
-)
-email_rec["CompletedDT"] = pd.to_datetime(
-    email_rec["Completion Date"], errors="coerce", dayfirst=True
-)
+email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
+email_rec["CompletedDT"] = pd.to_datetime(email_rec["Completion Date"], errors="coerce", dayfirst=True)
 email_rec["Date_Opened"] = email_rec["OpenedDT"].dt.date
 email_rec["Date_Completed"] = email_rec["CompletedDT"].dt.date
-email_rec["TargetResponseHours"] = pd.to_numeric(
-    email_rec["Target Response (Hours)"], errors="coerce"
-)
+email_rec["TargetResponseHours"] = pd.to_numeric(email_rec["Target Response (Hours)"], errors="coerce")
 
-case_cat["OpenedDT"] = pd.to_datetime(
-    case_cat["Date/Time Opened"], errors="coerce", dayfirst=True
-)
+case_cat["OpenedDT"] = pd.to_datetime(case_cat["Date/Time Opened"], errors="coerce", dayfirst=True)
 case_cat["Date_Opened"] = case_cat["OpenedDT"].dt.date
 
 items["AssignDT"] = pd.to_datetime(
@@ -183,7 +169,13 @@ pres["EndDT"] = pd.to_datetime(
     errors="coerce",
     dayfirst=True,
 )
-pres = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
+
+# Keep FULL presence (do not filter to available only)
+pres = pres.copy()
+
+# Subsets for metrics/charts
+pres_avail = pres[pres["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
+pres_online = pres[~pres["Service Presence Status: Developer Name"].isin(OFFLINE_STATUSES)].copy()
 
 
 # ---------------- CONTROLS ----------------
@@ -214,17 +206,9 @@ start, end = st.date_input(
 
 # ---------------- FILTERED DATA (DATE RANGE ONLY) ----------------
 
-email_rec_period = email_rec[
-    (email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)
-].copy()
-
-case_cat_period = case_cat[
-    (case_cat["Date_Opened"] >= start) & (case_cat["Date_Opened"] <= end)
-].copy()
-
-items_period = items[
-    (items["Date_Closed"] >= start) & (items["Date_Closed"] <= end)
-].copy()
+email_rec_period = email_rec[(email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)].copy()
+case_cat_period = case_cat[(case_cat["Date_Opened"] >= start) & (case_cat["Date_Opened"] <= end)].copy()
+items_period = items[(items["Date_Closed"] >= start) & (items["Date_Closed"] <= end)].copy()
 
 start_ts = pd.Timestamp(start)
 end_ts = pd.Timestamp(end) + pd.Timedelta(days=1)
@@ -247,13 +231,15 @@ else:
 
 avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 
-intervals = [clip(s, e, start_ts, end_ts) for s, e in zip(pres["StartDT"], pres["EndDT"])]
-intervals = [x for x in intervals if x]
-available_sec = sum_seconds(intervals)
+# Available (available statuses only) and Online (all except Offline)
+available_sec = seconds_in_window(pres_avail, start_ts, end_ts)
 available_hours = available_sec / 3600
 
+online_sec = seconds_in_window(pres_online, start_ts, end_ts)
+online_hours = online_sec / 3600
+
 total_handle_sec = items_period["HandleSec"].sum()
-util = (total_handle_sec / available_sec) if available_sec > 0 else 0
+util = (total_handle_sec / online_sec) if online_sec > 0 else 0
 
 email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
@@ -263,15 +249,8 @@ if len(completed_emails) > 0:
     closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
     aging_bins = [0, 4, 24, 72, np.inf]
     aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
-    completed_emails["AgingBucket"] = pd.cut(
-        closed_age_hours, bins=aging_bins, labels=aging_labels, right=False
-    )
-    closed_aging_summary = (
-        completed_emails["AgingBucket"]
-        .value_counts()
-        .reindex(aging_labels, fill_value=0)
-        .reset_index()
-    )
+    completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
+    closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
     closed_aging_summary.columns = ["Bucket", "Count"]
 else:
     aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
@@ -295,9 +274,10 @@ c3.metric("Avg Response Time (BH)", hm(avg_art))
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
 s1, s2, s3 = st.columns(3)
 s1.metric("Avg Handle Time", mmss(avg_aht))
-s2.metric("Available Hours", f"{available_hours:.1f}")
+s2.metric("Online Hours", f"{online_hours:.1f}")
 s3.metric("Utilisation", f"{util:.1%}")
 
+# Daily counts
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
 daily_received = daily_received.rename(columns={"Date_Opened": "Date"})
 
@@ -311,16 +291,14 @@ daily["Items_Handled"] = daily["Items_Handled"].astype(int)
 daily["Emails_Received"] = daily["Emails_Received"].astype(int)
 
 
-def hours_for_day(day_ts):
+def hours_for_day_available(day_ts):
     ds = pd.Timestamp(day_ts).normalize()
     de = ds + pd.Timedelta(days=1)
-    iv = [clip(s, e, ds, de) for s, e in zip(pres["StartDT"], pres["EndDT"])]
-    iv = [x for x in iv if x]
-    return sum_seconds(iv) / 3600
+    return seconds_in_window(pres_avail, ds, de) / 3600
 
 
 if len(daily) > 0:
-    daily["Available_Hours"] = daily["Date"].apply(hours_for_day)
+    daily["Available_Hours"] = daily["Date"].apply(hours_for_day_available)
     daily = daily.sort_values("Date").reset_index(drop=True)
     daily["DateLabel"] = daily["Date"].dt.strftime("%a %d %b")
 
@@ -353,8 +331,6 @@ if len(daily) > 0:
         {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
     )
 
-    # Scale hours to the same domain as counts so we can share one Y axis.
-    # The text labels already show the real hour values, so no information is lost.
     count_max = dow_counts_long["AverageCount"].max()
     hours_max = dow["Available_Hours"].max()
     scale_factor = count_max / hours_max if hours_max > 0 else 1
@@ -380,27 +356,24 @@ if len(daily) > 0:
         xOffset="Metric:N",
         tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
     )
+
     dow_bar_labels = alt.Chart(dow_counts_long).mark_text(dy=-8, fontSize=10).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("AverageCount:Q"),
         xOffset="Metric:N",
         text=alt.Text("AverageCount:Q", format=",.0f"),
-        color=alt.Color(
-            "Metric:N",
-            scale=alt.Scale(domain=color_domain, range=color_range),
-            legend=None,
-        ),
+        color=alt.Color("Metric:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None),
     )
 
-    dow_hours = dow.copy()
-    dow_hours_line = alt.Chart(dow_hours).mark_line(
+    dow_hours_line = alt.Chart(dow).mark_line(
         point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3
     ).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("Available_Hours_Scaled:Q", axis=None),
         tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
     )
-    dow_hours_labels = alt.Chart(dow_hours).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
+
+    dow_hours_labels = alt.Chart(dow).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
         x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
         y=alt.Y("Available_Hours_Scaled:Q", axis=None),
         text=alt.Text("Available_Hours:Q", format=".1f"),
@@ -408,6 +381,7 @@ if len(daily) > 0:
 
     dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).properties(height=340)
     st.altair_chart(dow_chart, use_container_width=True)
+
     st.markdown(
         """
         <div style="display:flex;gap:24px;justify-content:center;margin-top:-8px;margin-bottom:8px;">
@@ -522,7 +496,12 @@ if len(case_cat_period) > 0:
         y=alt.Y("Category:N", title="Category", sort=category_sort),
         color=alt.Color("Reason:N", title="Reason", sort=reason_sort),
         order=alt.Order("Count:Q", sort="descending"),
-        tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=","), alt.Tooltip("CategoryTotal:Q", format=",")],
+        tooltip=[
+            "Category",
+            "Reason",
+            alt.Tooltip("Count:Q", format=","),
+            alt.Tooltip("CategoryTotal:Q", format=","),
+        ],
     )
 
     cat_labels = alt.Chart(chart_data[["Category", "CategoryTotal"]].drop_duplicates()).mark_text(
@@ -539,9 +518,8 @@ if len(case_cat_period) > 0:
     st.altair_chart(stacked_chart, use_container_width=True)
     st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
 
-    heatmap_data = chart_data.copy()
     heatmap = (
-        alt.Chart(heatmap_data)
+        alt.Chart(chart_data)
         .mark_rect()
         .encode(
             x=alt.X("Reason:N", sort=reason_sort, title="Reason"),

@@ -77,7 +77,9 @@ def load(path):
                 return pd.read_csv(path, encoding="latin-1", low_memory=False)
 
 
-def business_seconds_between(start_dt, end_dt, start_hour=BUSINESS_START_HOUR, end_hour=BUSINESS_END_HOUR):
+def business_seconds_between(
+    start_dt, end_dt, start_hour=BUSINESS_START_HOUR, end_hour=BUSINESS_END_HOUR
+):
     """Business-time seconds between two timestamps, weekends included."""
     if pd.isna(start_dt) or pd.isna(end_dt) or end_dt <= start_dt:
         return np.nan
@@ -140,13 +142,21 @@ with st.spinner("Loading data…"):
 for df in (email_rec, items, pres, case_cat):
     df.columns = df.columns.str.strip()
 
-email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
-email_rec["CompletedDT"] = pd.to_datetime(email_rec["Completion Date"], errors="coerce", dayfirst=True)
+email_rec["OpenedDT"] = pd.to_datetime(
+    email_rec["Date/Time Opened"], errors="coerce", dayfirst=True
+)
+email_rec["CompletedDT"] = pd.to_datetime(
+    email_rec["Completion Date"], errors="coerce", dayfirst=True
+)
 email_rec["Date_Opened"] = email_rec["OpenedDT"].dt.date
 email_rec["Date_Completed"] = email_rec["CompletedDT"].dt.date
-email_rec["TargetResponseHours"] = pd.to_numeric(email_rec["Target Response (Hours)"], errors="coerce")
+email_rec["TargetResponseHours"] = pd.to_numeric(
+    email_rec["Target Response (Hours)"], errors="coerce"
+)
 
-case_cat["OpenedDT"] = pd.to_datetime(case_cat["Date/Time Opened"], errors="coerce", dayfirst=True)
+case_cat["OpenedDT"] = pd.to_datetime(
+    case_cat["Date/Time Opened"], errors="coerce", dayfirst=True
+)
 case_cat["Date_Opened"] = case_cat["OpenedDT"].dt.date
 
 items["AssignDT"] = pd.to_datetime(
@@ -202,49 +212,18 @@ start, end = st.date_input(
     help="Shows previous completed week by default",
 )
 
-with st.expander("Filters"):
-    queue_options = sorted(items["Queue: Name"].dropna().unique().tolist())
-    selected_queues = st.multiselect("Queue", queue_options, default=queue_options)
-
-    origin_options = sorted(email_rec["Case Origin"].dropna().unique().tolist())
-    selected_origins = st.multiselect("Case Origin", origin_options, default=origin_options)
-
-    priority_options = sorted(email_rec["Priority"].dropna().unique().tolist())
-    selected_priorities = st.multiselect("Priority", priority_options, default=priority_options)
-
-    milestone_options = sorted(email_rec["Milestone"].dropna().unique().tolist())
-    selected_milestones = st.multiselect("Milestone", milestone_options, default=milestone_options)
-
-# Count non-default filters for indicator
-_active_filters = sum([
-    len(selected_queues) < len(queue_options),
-    len(selected_origins) < len(origin_options),
-    len(selected_priorities) < len(priority_options),
-    len(selected_milestones) < len(milestone_options),
-])
-if _active_filters > 0:
-    st.caption(f"⚠ {_active_filters} filter{'s' if _active_filters > 1 else ''} active — results are scoped.")
-
-
-# ---------------- FILTERED DATA ----------------
+# ---------------- FILTERED DATA (DATE RANGE ONLY) ----------------
 
 email_rec_period = email_rec[
-    (email_rec["Date_Opened"] >= start)
-    & (email_rec["Date_Opened"] <= end)
-    & (email_rec["Case Origin"].isin(selected_origins))
-    & (email_rec["Priority"].isin(selected_priorities))
-    & (email_rec["Milestone"].isin(selected_milestones))
+    (email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)
 ].copy()
 
 case_cat_period = case_cat[
-    (case_cat["Date_Opened"] >= start)
-    & (case_cat["Date_Opened"] <= end)
+    (case_cat["Date_Opened"] >= start) & (case_cat["Date_Opened"] <= end)
 ].copy()
 
 items_period = items[
-    (items["Date_Closed"] >= start)
-    & (items["Date_Closed"] <= end)
-    & (items["Queue: Name"].isin(selected_queues))
+    (items["Date_Closed"] >= start) & (items["Date_Closed"] <= end)
 ].copy()
 
 start_ts = pd.Timestamp(start)
@@ -284,10 +263,18 @@ if len(completed_emails) > 0:
     closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
     aging_bins = [0, 4, 24, 72, np.inf]
     aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
-    completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
-    closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
+    completed_emails["AgingBucket"] = pd.cut(
+        closed_age_hours, bins=aging_bins, labels=aging_labels, right=False
+    )
+    closed_aging_summary = (
+        completed_emails["AgingBucket"]
+        .value_counts()
+        .reindex(aging_labels, fill_value=0)
+        .reset_index()
+    )
     closed_aging_summary.columns = ["Bucket", "Count"]
 else:
+    aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
     closed_aging_summary = pd.DataFrame({"Bucket": aging_labels, "Count": [0] * 4})
 
 
@@ -374,9 +361,22 @@ if len(daily) > 0:
     dow["Available_Hours_Scaled"] = dow["Available_Hours"] * scale_factor
 
     dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
-        x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(), axis=alt.Axis(labelAngle=0, labelPadding=6)),
-        y=alt.Y("AverageCount:Q", title="Avg Count", axis=alt.Axis(orient="left", format=".0f", titlePadding=12)),
-        color=alt.Color("Metric:N", title="Legend", scale=alt.Scale(domain=color_domain, range=color_range)),
+        x=alt.X(
+            "DoWShort:N",
+            title="Day of Week",
+            sort=dow["DoWShort"].tolist(),
+            axis=alt.Axis(labelAngle=0, labelPadding=6),
+        ),
+        y=alt.Y(
+            "AverageCount:Q",
+            title="Avg Count",
+            axis=alt.Axis(orient="left", format=".0f", titlePadding=12),
+        ),
+        color=alt.Color(
+            "Metric:N",
+            title="Legend",
+            scale=alt.Scale(domain=color_domain, range=color_range),
+        ),
         xOffset="Metric:N",
         tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
     )
@@ -385,7 +385,11 @@ if len(daily) > 0:
         y=alt.Y("AverageCount:Q"),
         xOffset="Metric:N",
         text=alt.Text("AverageCount:Q", format=",.0f"),
-        color=alt.Color("Metric:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None),
+        color=alt.Color(
+            "Metric:N",
+            scale=alt.Scale(domain=color_domain, range=color_range),
+            legend=None,
+        ),
     )
 
     dow_hours = dow.copy()
@@ -402,10 +406,7 @@ if len(daily) > 0:
         text=alt.Text("Available_Hours:Q", format=".1f"),
     )
 
-    dow_chart = (
-        alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels)
-        .properties(height=340)
-    )
+    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).properties(height=340)
     st.altair_chart(dow_chart, use_container_width=True)
     st.markdown(
         """
@@ -431,24 +432,27 @@ else:
 
 st.subheader("SLA Performance")
 if closed_aging_summary["Count"].sum() > 0:
-    closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+    closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(
+        color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+    ).encode(
         x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
         y=alt.Y("Count:Q", title="Closed Email Count"),
         tooltip=["Bucket", "Count"],
     )
-    closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(dy=-10, color="#15803d", fontSize=11).encode(
+    closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(
+        dy=-10, color="#15803d", fontSize=11
+    ).encode(
         x=alt.X("Bucket:N", sort=aging_labels),
         y=alt.Y("Count:Q"),
         text=alt.Text("Count:Q", format=","),
     )
-    closed_aging_chart = (
-        alt.layer(closed_aging_bars, closed_aging_labels)
-        .properties(height=340)
-    )
+    closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=340)
     st.altair_chart(closed_aging_chart, use_container_width=True)
     st.caption("Closed emails grouped by business-hour response time.")
 else:
-    st.info("No closed emails with response time data for the selected period. Adjust the date range or check that completion timestamps are present.")
+    st.info(
+        "No closed emails with response time data for the selected period. Adjust the date range or check that completion timestamps are present."
+    )
 
 st.subheader("Case Category & Reason Breakdown")
 if len(case_cat_period) > 0:
@@ -521,17 +525,16 @@ if len(case_cat_period) > 0:
         tooltip=["Category", "Reason", alt.Tooltip("Count:Q", format=","), alt.Tooltip("CategoryTotal:Q", format=",")],
     )
 
-    cat_labels = alt.Chart(
-        chart_data[["Category", "CategoryTotal"]].drop_duplicates()
-    ).mark_text(dx=6, color="#15803d", fontSize=10).encode(
+    cat_labels = alt.Chart(chart_data[["Category", "CategoryTotal"]].drop_duplicates()).mark_text(
+        dx=6, color="#15803d", fontSize=10
+    ).encode(
         x=alt.X("CategoryTotal:Q"),
         y=alt.Y("Category:N", sort=category_sort),
         text=alt.Text("CategoryTotal:Q", format=","),
     )
 
-    stacked_chart = (
-        alt.layer(cat_bars, cat_labels)
-        .properties(height=min(max(340, len(category_sort) * 26), 600))
+    stacked_chart = alt.layer(cat_bars, cat_labels).properties(
+        height=min(max(340, len(category_sort) * 26), 600)
     )
     st.altair_chart(stacked_chart, use_container_width=True)
     st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
@@ -571,10 +574,12 @@ if len(daily_display) > 0:
 else:
     st.info("No daily records found for the selected date range.")
 
-
 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
 with st.expander("Data Quality", expanded=False):
-    st.markdown("<p style='color:#6b7280;font-size:0.82rem;margin-bottom:8px;'>Rows excluded due to unparseable timestamps — review source data if counts are high.</p>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='color:#6b7280;font-size:0.82rem;margin-bottom:8px;'>Rows excluded due to unparseable timestamps — review source data if counts are high.</p>",
+        unsafe_allow_html=True,
+    )
     dq1, dq2, dq3 = st.columns(3)
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
     dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")

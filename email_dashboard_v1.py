@@ -701,33 +701,6 @@ if len(case_cat_period) > 0:
 else:
     st.info("No case category data available for the selected period. Try widening the date range.")
 
-st.subheader("Daily Breakdown")
-daily_display = daily.copy()
-if len(daily_display) > 0:
-    daily_display["Date"] = daily_display["Date"].dt.date
-    daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
-    if is_dept_view:
-        daily_display = daily_display.rename(columns={
-            "Emails_Received": "Received",
-            "Items_Handled": "Handled",
-            "Available_Hours": "Avail. Hours",
-        })
-        _show_cols = ["Date", "Received", "Handled", "Avail. Hours", "DateLabel"]
-    else:
-        daily_display["AHT"] = daily_display["AvgHandleSec"].apply(mmss)
-        daily_display = daily_display.rename(columns={
-            "Items_Handled": "Handled",
-            "Available_Hours": "Avail. Hours",
-        })
-        _show_cols = ["Date", "Handled", "AHT", "Avail. Hours"]
-    _show_cols = [c for c in _show_cols if c in daily_display.columns]
-    st.dataframe(
-        daily_display[_show_cols].sort_values("Date", ascending=True),
-        use_container_width=True, hide_index=True
-    )
-else:
-    st.info("No daily records found for the selected date range.")
-
 # ── Department-level agent performance charts ──
 if is_dept_view and len(items_period) > 0:
     st.subheader("Agent Performance")
@@ -841,6 +814,33 @@ if is_dept_view and len(items_period) > 0:
         )
     else:
         st.info("No presence / available-hours data for the selected period.")
+
+with st.expander("Daily Breakdown", expanded=False):
+    daily_display = daily.copy()
+    if len(daily_display) > 0:
+        daily_display["Date"] = daily_display["Date"].dt.date
+        daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
+        if is_dept_view:
+            daily_display = daily_display.rename(columns={
+                "Emails_Received": "Received",
+                "Items_Handled": "Handled",
+                "Available_Hours": "Avail. Hours",
+            })
+            _show_cols = ["Date", "Received", "Handled", "Avail. Hours", "DateLabel"]
+        else:
+            daily_display["AHT"] = daily_display["AvgHandleSec"].apply(mmss)
+            daily_display = daily_display.rename(columns={
+                "Items_Handled": "Handled",
+                "Available_Hours": "Avail. Hours",
+            })
+            _show_cols = ["Date", "Handled", "AHT", "Avail. Hours"]
+        _show_cols = [c for c in _show_cols if c in daily_display.columns]
+        st.dataframe(
+            daily_display[_show_cols].sort_values("Date", ascending=True),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No daily records found for the selected date range.")
 
 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
 with st.expander("Data Quality", expanded=False):

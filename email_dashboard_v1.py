@@ -125,6 +125,28 @@ def seconds_in_window(pres_df: pd.DataFrame, window_start: pd.Timestamp, window_
     return sum_seconds(intervals)
 
 
+def _parse_name(name):
+    """Reduce a name string to a (first, last) tuple for cross-file fuzzy matching.
+
+    Handles formats:
+      "First Last"          -> ("first", "last")
+      "First Middle Last"   -> ("first", "last")   # middle name ignored
+      "Last, First [Middle]"-> ("first", "last")   # comma-separated reversed
+    """
+    if not isinstance(name, str) or not name.strip():
+        return ("", "")
+    name = name.strip()
+    if "," in name:
+        last_part, first_part = name.split(",", 1)
+        first = first_part.strip().split()[0].lower() if first_part.strip() else ""
+        last = last_part.strip().lower()
+    else:
+        tokens = name.split()
+        first = tokens[0].lower() if tokens else ""
+        last = tokens[-1].lower() if len(tokens) > 1 else tokens[0].lower() if tokens else ""
+    return (first, last)
+
+
 # ---------------- LOAD & PREP ----------------
 
 with st.spinner("Loading data…"):
@@ -235,13 +257,14 @@ end_ts = pd.Timestamp(end) + pd.Timedelta(days=1)
 # Apply agent filter where data supports it
 if not is_dept_view:
     items_period = items_period[items_period["User: Full Name"].astype(str) == selected_agent].copy()
+    _agent_key = _parse_name(selected_agent)
     if _email_agent_col:
         email_rec_period = email_rec_period[
-            email_rec_period[_email_agent_col].astype(str) == selected_agent
+            email_rec_period[_email_agent_col].astype(str).apply(_parse_name) == _agent_key
         ].copy()
     if _case_cat_agent_col:
         case_cat_period = case_cat_period[
-            case_cat_period[_case_cat_agent_col].astype(str) == selected_agent
+            case_cat_period[_case_cat_agent_col].astype(str).apply(_parse_name) == _agent_key
         ].copy()
 
 
@@ -266,8 +289,9 @@ avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 pres_in_window = pres[(pres["StartDT"] < end_ts) & (pres["EndDT"].fillna(end_ts) > start_ts)].copy()
 
 if not is_dept_view:
+    _agent_key = _parse_name(selected_agent)
     pres_in_window = pres_in_window[
-        pres_in_window["Created By: Full Name"].astype(str) == selected_agent
+        pres_in_window["Created By: Full Name"].astype(str).apply(_parse_name) == _agent_key
     ].copy()
 
 pres_avail = pres_in_window[pres_in_window["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()

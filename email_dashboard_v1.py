@@ -381,6 +381,20 @@ if is_dept_view:
 else:
     s4.metric("In Presence Data", "Yes" if coverage > 0 else "No")
 
+# Show name-match diagnostic inline when presence data is missing for the selected agent
+if not is_dept_view and not _matching_pres_names:
+    _sample = list(_pres_window_names[:8])
+    _key_str = str(_parse_name(selected_agent))
+    _names_str = (
+        ", ".join(_sample) + (" ..." if len(_pres_window_names) > 8 else "")
+        if _sample else "none - check that the date range overlaps the presence export."
+    )
+    st.warning("No presence data matched for agent: " + selected_agent)
+    st.caption(
+        "Parsed key: " + _key_str
+        + " | Presence names in window (" + str(len(_pres_window_names)) + " unique): "
+        + _names_str
+    )
 # Daily counts
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
 daily_received = daily_received.rename(columns={"Date_Opened": "Date"})

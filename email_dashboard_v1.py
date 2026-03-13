@@ -731,7 +731,40 @@ else:
 # ── Department-level agent performance charts ──
 if is_dept_view and len(items_period) > 0:
     st.subheader("Agent Performance")
-    agent_perf_col1, agent_perf_col2 = st.columns(2)
+    agent_perf_col1, agent_perf_col2, agent_perf_col3 = st.columns(3)
+
+    # --- Items handled per agent ---
+    agent_handled = (
+        items_period.groupby("User: Full Name").size()
+        .reset_index(name="Items_Handled")
+        .rename(columns={"User: Full Name": "Agent"})
+    )
+    agent_handled = agent_handled.sort_values("Items_Handled", ascending=False).reset_index(drop=True)
+
+    with agent_perf_col3:
+        st.markdown("**Items Handled by Agent**")
+        if len(agent_handled) > 0:
+            _handled_sort = agent_handled["Agent"].tolist()
+            handled_bar = alt.Chart(agent_handled).mark_bar(
+                color="#86efac", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+            ).encode(
+                x=alt.X("Agent:N", title="Agent", sort=_handled_sort,
+                        axis=alt.Axis(labelAngle=-35, labelPadding=6, labelLimit=120)),
+                y=alt.Y("Items_Handled:Q", title="Items Handled",
+                        axis=alt.Axis(format=".0f", titlePadding=12)),
+                tooltip=["Agent", alt.Tooltip("Items_Handled:Q", format=",", title="Items Handled")],
+            )
+            handled_labels = alt.Chart(agent_handled).mark_text(dy=-8, fontSize=10, color="#15803d").encode(
+                x=alt.X("Agent:N", sort=_handled_sort),
+                y=alt.Y("Items_Handled:Q"),
+                text=alt.Text("Items_Handled:Q", format=","),
+            )
+            st.altair_chart(
+                alt.layer(handled_bar, handled_labels).properties(height=340),
+                use_container_width=True,
+            )
+        else:
+            st.info("No items data available.")
 
     # --- AHT per agent ---
     agent_aht = (

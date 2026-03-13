@@ -360,10 +360,15 @@ st.markdown(
 )
 
 # ── Primary metrics (top tier) ──
-c1, c2, c3 = st.columns(3)
-c1.metric("Emails Received", f"{total_received:,}")
-c2.metric("Work Items Handled", f"{total_handled:,}")
-c3.metric("Avg Response Time (BH)", hm(avg_art))
+if is_dept_view:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Emails Received", f"{total_received:,}")
+    c2.metric("Work Items Handled", f"{total_handled:,}")
+    c3.metric("Avg Response Time (BH)", hm(avg_art))
+else:
+    c2, c3 = st.columns(2)
+    c2.metric("Work Items Handled", f"{total_handled:,}")
+    c3.metric("Avg Response Time (BH)", hm(avg_art))
 
 # ── Secondary metrics (contextual) ──
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)

@@ -436,89 +436,126 @@ if len(daily) > 0:
     dow["DoW"] = pd.Categorical(dow["DoW"], categories=ordered_dow, ordered=True)
     dow["DoWShort"] = dow["DoW"].astype(str).str.slice(0, 3)
 
-    color_domain = ["Emails Received", "Items Handled", "Available Hours"]
-    color_range = ["#15803d", "#86efac", "#0d9488"]
+    if is_dept_view:
+        color_domain = ["Emails Received", "Items Handled", "Available Hours"]
+        color_range = ["#15803d", "#86efac", "#0d9488"]
 
-    dow_counts_long = dow.melt(
-        id_vars=["DoW", "DoWShort"],
-        value_vars=["Emails_Received", "Items_Handled"],
-        var_name="Metric",
-        value_name="AverageCount",
-    )
-    dow_counts_long["Metric"] = dow_counts_long["Metric"].replace(
-        {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
-    )
+        dow_counts_long = dow.melt(
+            id_vars=["DoW", "DoWShort"],
+            value_vars=["Emails_Received", "Items_Handled"],
+            var_name="Metric",
+            value_name="AverageCount",
+        )
+        dow_counts_long["Metric"] = dow_counts_long["Metric"].replace(
+            {"Emails_Received": "Emails Received", "Items_Handled": "Items Handled"}
+        )
 
-    count_max = dow_counts_long["AverageCount"].max()
-    hours_max = dow["Available_Hours"].max()
-    scale_factor = count_max / hours_max if hours_max > 0 else 1
-    dow["Available_Hours_Scaled"] = dow["Available_Hours"] * scale_factor
+        count_max = dow_counts_long["AverageCount"].max()
+        hours_max = dow["Available_Hours"].max()
+        scale_factor = count_max / hours_max if hours_max > 0 else 1
+        dow["Available_Hours_Scaled"] = dow["Available_Hours"] * scale_factor
 
-    dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
-        x=alt.X(
-            "DoWShort:N",
-            title="Day of Week",
-            sort=dow["DoWShort"].tolist(),
-            axis=alt.Axis(labelAngle=0, labelPadding=6),
-        ),
-        y=alt.Y(
-            "AverageCount:Q",
-            title="Avg Count",
-            axis=alt.Axis(orient="left", format=".0f", titlePadding=12),
-        ),
-        color=alt.Color(
-            "Metric:N",
-            title="Legend",
-            scale=alt.Scale(domain=color_domain, range=color_range),
-        ),
-        xOffset="Metric:N",
-        tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
-    )
+        dow_bar = alt.Chart(dow_counts_long).mark_bar().encode(
+            x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(),
+                    axis=alt.Axis(labelAngle=0, labelPadding=6)),
+            y=alt.Y("AverageCount:Q", title="Avg Count",
+                    axis=alt.Axis(orient="left", format=".0f", titlePadding=12)),
+            color=alt.Color("Metric:N", title="Legend",
+                            scale=alt.Scale(domain=color_domain, range=color_range)),
+            xOffset="Metric:N",
+            tooltip=["DoW", "Metric", alt.Tooltip("AverageCount:Q", format=",.0f")],
+        )
+        dow_bar_labels = alt.Chart(dow_counts_long).mark_text(dy=-8, fontSize=10).encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("AverageCount:Q"),
+            xOffset="Metric:N",
+            text=alt.Text("AverageCount:Q", format=",.0f"),
+            color=alt.Color("Metric:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None),
+        )
+        dow_hours_line = alt.Chart(dow).mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3
+        ).encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("Available_Hours_Scaled:Q", axis=None),
+            tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
+        )
+        dow_hours_labels = alt.Chart(dow).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("Available_Hours_Scaled:Q", axis=None),
+            text=alt.Text("Available_Hours:Q", format=".1f"),
+        )
+        dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).properties(height=340)
+        st.altair_chart(dow_chart, use_container_width=True)
+        st.markdown(
+            """
+            <div style="display:flex;gap:24px;justify-content:center;margin-top:-8px;margin-bottom:8px;">
+                <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                    <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#15803d;"></span>
+                    Emails Received
+                </span>
+                <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                    <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#86efac;"></span>
+                    Items Handled
+                </span>
+                <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                    <span style="display:inline-block;width:28px;height:3px;background:#0d9488;border-radius:2px;position:relative;top:0px;"></span>
+                    Avg Available Hours
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        # Agent view: items handled bars + available hours line
+        count_max = dow["Items_Handled"].max()
+        hours_max = dow["Available_Hours"].max()
+        scale_factor = count_max / hours_max if hours_max > 0 else 1
+        dow["Available_Hours_Scaled"] = dow["Available_Hours"] * scale_factor
 
-    dow_bar_labels = alt.Chart(dow_counts_long).mark_text(dy=-8, fontSize=10).encode(
-        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("AverageCount:Q"),
-        xOffset="Metric:N",
-        text=alt.Text("AverageCount:Q", format=",.0f"),
-        color=alt.Color("Metric:N", scale=alt.Scale(domain=color_domain, range=color_range), legend=None),
-    )
+        agent_bar = alt.Chart(dow).mark_bar(
+            color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+        ).encode(
+            x=alt.X("DoWShort:N", title="Day of Week", sort=dow["DoWShort"].tolist(),
+                    axis=alt.Axis(labelAngle=0, labelPadding=6)),
+            y=alt.Y("Items_Handled:Q", title="Avg Items Handled",
+                    axis=alt.Axis(format=".0f", titlePadding=12)),
+            tooltip=["DoW", alt.Tooltip("Items_Handled:Q", format=",.1f", title="Avg Handled")],
+        )
+        agent_bar_labels = alt.Chart(dow).mark_text(dy=-8, fontSize=11, color="#15803d").encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("Items_Handled:Q"),
+            text=alt.Text("Items_Handled:Q", format=",.0f"),
+        )
+        agent_hours_line = alt.Chart(dow).mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3
+        ).encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("Available_Hours_Scaled:Q", axis=None),
+            tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
+        )
+        agent_hours_labels = alt.Chart(dow).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
+            x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
+            y=alt.Y("Available_Hours_Scaled:Q", axis=None),
+            text=alt.Text("Available_Hours:Q", format=".1f"),
+        )
+        dow_chart = alt.layer(agent_bar, agent_bar_labels, agent_hours_line, agent_hours_labels).properties(height=340)
+        st.altair_chart(dow_chart, use_container_width=True)
+        st.markdown(
+            """
+            <div style="display:flex;gap:24px;justify-content:center;margin-top:-8px;margin-bottom:8px;">
+                <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                    <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#15803d;"></span>
+                    Items Handled
+                </span>
+                <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
+                    <span style="display:inline-block;width:28px;height:3px;background:#0d9488;border-radius:2px;position:relative;top:0px;"></span>
+                    Avg Available Hours
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    dow_hours_line = alt.Chart(dow).mark_line(
-        point=alt.OverlayMarkDef(filled=True, size=70), color="#0d9488", strokeWidth=3
-    ).encode(
-        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours_Scaled:Q", axis=None),
-        tooltip=["DoW", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
-    )
-
-    dow_hours_labels = alt.Chart(dow).mark_text(dy=-10, color="#0d9488", fontSize=10).encode(
-        x=alt.X("DoWShort:N", sort=dow["DoWShort"].tolist()),
-        y=alt.Y("Available_Hours_Scaled:Q", axis=None),
-        text=alt.Text("Available_Hours:Q", format=".1f"),
-    )
-
-    dow_chart = alt.layer(dow_bar, dow_bar_labels, dow_hours_line, dow_hours_labels).properties(height=340)
-    st.altair_chart(dow_chart, use_container_width=True)
-
-    st.markdown(
-        """
-        <div style="display:flex;gap:24px;justify-content:center;margin-top:-8px;margin-bottom:8px;">
-            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
-                <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#15803d;"></span>
-                Emails Received
-            </span>
-            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
-                <span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#86efac;"></span>
-                Items Handled
-            </span>
-            <span style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:#374151;">
-                <span style="display:inline-block;width:28px;height:3px;background:#0d9488;border-radius:2px;position:relative;top:0px;"></span>
-                Avg Available Hours
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 else:
     st.info("No daily data available for the selected date range. Try adjusting the date picker above.")
 

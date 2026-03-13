@@ -290,8 +290,12 @@ pres_in_window = pres[(pres["StartDT"] < end_ts) & (pres["EndDT"].fillna(end_ts)
 
 if not is_dept_view:
     _agent_key = _parse_name(selected_agent)
+    _matching_pres_names = {
+        n for n in pres_in_window["Created By: Full Name"].dropna().astype(str).unique()
+        if _parse_name(n) == _agent_key
+    }
     pres_in_window = pres_in_window[
-        pres_in_window["Created By: Full Name"].astype(str).apply(_parse_name) == _agent_key
+        pres_in_window["Created By: Full Name"].isin(_matching_pres_names)
     ].copy()
 
 pres_avail = pres_in_window[pres_in_window["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
@@ -306,15 +310,19 @@ online_hours = online_sec / 3600
 # Utilisation fix: align numerator to the same agent population present in Presence export.
 # If Presence is missing some agents, handle time from those agents must not be included.
 presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
-items_for_util = items_period[items_period["User: Full Name"].astype(str).isin(presence_agents)].copy()
+_pres_name_keys = {_parse_name(n) for n in presence_agents}
+items_for_util = items_period[
+    items_period["User: Full Name"].astype(str).apply(lambda n: _parse_name(n) in _pres_name_keys)
+].copy()
 
 total_handle_sec = items_for_util["HandleSec"].sum()
 util = (total_handle_sec / online_sec) if online_sec > 0 else 0
 
 # Coverage indicator (internal diagnostic; shown as metric)
 items_agents = set(items_period["User: Full Name"].dropna().astype(str).unique().tolist())
-covered_agents = len(items_agents.intersection(presence_agents))
-coverage = (covered_agents / len(items_agents)) if len(items_agents) > 0 else 0
+_items_name_keys = {_parse_name(n) for n in items_agents}
+covered_agents = sum(1 for k in _items_name_keys if k in _pres_name_keys)
+coverage = (covered_agents / len(_items_name_keys)) if len(_items_name_keys) > 0 else 0
 
 email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()

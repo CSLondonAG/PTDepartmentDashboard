@@ -136,6 +136,17 @@ with st.spinner("Loading data…"):
 for df in (email_rec, items, pres, case_cat):
     df.columns = df.columns.str.strip()
 
+# Detect agent column in email_rec / case_cat for per-agent filtering
+_agent_keywords = {"agent", "owner"}
+_email_agent_col = next(
+    (c for c in email_rec.columns if any(kw in c.lower() for kw in _agent_keywords) or c == "User: Full Name"),
+    None,
+)
+_case_cat_agent_col = next(
+    (c for c in case_cat.columns if any(kw in c.lower() for kw in _agent_keywords) or c == "User: Full Name"),
+    None,
+)
+
 email_rec["OpenedDT"] = pd.to_datetime(email_rec["Date/Time Opened"], errors="coerce", dayfirst=True)
 email_rec["CompletedDT"] = pd.to_datetime(email_rec["Completion Date"], errors="coerce", dayfirst=True)
 email_rec["Date_Opened"] = email_rec["OpenedDT"].dt.date
@@ -194,11 +205,23 @@ week_start = last_sunday - pd.Timedelta(days=6)
 default_start = max(week_start, email_rec["Date_Opened"].min())
 default_end = min(last_sunday, email_rec["Date_Opened"].max())
 
-start, end = st.date_input(
-    "Date Range",
-    value=(default_start, default_end),
-    help="Shows previous completed week by default",
-)
+filter_col1, filter_col2 = st.columns([3, 2])
+with filter_col1:
+    start, end = st.date_input(
+        "Date Range",
+        value=(default_start, default_end),
+        help="Shows previous completed week by default",
+    )
+with filter_col2:
+    _all_agents_label = "All Agents (Department)"
+    _agent_pool = sorted(items["User: Full Name"].dropna().astype(str).unique().tolist())
+    selected_agent = st.selectbox(
+        "Agent",
+        [_all_agents_label] + _agent_pool,
+        index=0,
+        help="Select an agent for individual performance, or keep the default for the full department view.",
+    )
+    is_dept_view = selected_agent == _all_agents_label
 
 # ---------------- FILTERED DATA (DATE RANGE ONLY) ----------------
 
@@ -208,6 +231,18 @@ items_period = items[(items["Date_Closed"] >= start) & (items["Date_Closed"] <= 
 
 start_ts = pd.Timestamp(start)
 end_ts = pd.Timestamp(end) + pd.Timedelta(days=1)
+
+# Apply agent filter where data supports it
+if not is_dept_view:
+    items_period = items_period[items_period["User: Full Name"].astype(str) == selected_agent].copy()
+    if _email_agent_col:
+        email_rec_period = email_rec_period[
+            email_rec_period[_email_agent_col].astype(str) == selected_agent
+        ].copy()
+    if _case_cat_agent_col:
+        case_cat_period = case_cat_period[
+            case_cat_period[_case_cat_agent_col].astype(str) == selected_agent
+        ].copy()
 
 
 # ---------------- METRICS ----------------
@@ -229,6 +264,11 @@ avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 
 # Presence subsets (scoped to selected window for agent coverage)
 pres_in_window = pres[(pres["StartDT"] < end_ts) & (pres["EndDT"].fillna(end_ts) > start_ts)].copy()
+
+if not is_dept_view:
+    pres_in_window = pres_in_window[
+        pres_in_window["Created By: Full Name"].astype(str) == selected_agent
+    ].copy()
 
 pres_avail = pres_in_window[pres_in_window["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
 pres_online = pres_in_window[~pres_in_window["Service Presence Status: Developer Name"].isin(OFFLINE_STATUSES)].copy()
@@ -270,8 +310,9 @@ else:
 
 # ---------------- DISPLAY ----------------
 
+_view_label = selected_agent if not is_dept_view else "Department"
 st.markdown(
-    f"<p style='color:#6b7280;margin-top:-8px;margin-bottom:20px;font-size:0.9rem;'>{start} — {end}</p>",
+    f"<p style='color:#6b7280;margin-top:-8px;margin-bottom:20px;font-size:0.9rem;'>{start} — {end} · {_view_label}</p>",
     unsafe_allow_html=True,
 )
 
@@ -287,7 +328,10 @@ s1, s2, s3, s4 = st.columns(4)
 s1.metric("Avg Handle Time", mmss(avg_aht))
 s2.metric("Online Hours", f"{online_hours:.1f}")
 s3.metric("Utilisation", f"{util:.1%}")
-s4.metric("Presence Coverage", f"{coverage:.0%}")
+if is_dept_view:
+    s4.metric("Presence Coverage", f"{coverage:.0%}")
+else:
+    s4.metric("In Presence Data", "Yes" if coverage > 0 else "No")
 
 # Daily counts
 daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
@@ -434,7 +478,8 @@ if closed_aging_summary["Count"].sum() > 0:
     )
     closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=340)
     st.altair_chart(closed_aging_chart, use_container_width=True)
-    st.caption("Closed emails grouped by business-hour response time.")
+    _sla_note = "" if is_dept_view or _email_agent_col else " Showing department-level data (no agent column detected in email export)."
+    st.caption("Closed emails grouped by business-hour response time." + _sla_note)
 else:
     st.info(
         "No closed emails with response time data for the selected period. Adjust the date range or check that completion timestamps are present."
@@ -528,7 +573,8 @@ if len(case_cat_period) > 0:
         height=min(max(340, len(category_sort) * 26), 600)
     )
     st.altair_chart(stacked_chart, use_container_width=True)
-    st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'.")
+    _cat_note = "" if is_dept_view or _case_cat_agent_col else " Showing department-level data (no agent column detected in case category export)."
+    st.caption("Top categories with reason-level distribution. Less frequent reasons grouped as 'Other'." + _cat_note)
 
     heatmap = (
         alt.Chart(chart_data)

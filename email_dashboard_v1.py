@@ -404,6 +404,13 @@ daily_handled = daily_handled.rename(columns={"Date_Closed": "Date"})
 
 daily = daily_received.merge(daily_handled, on="Date", how="outer").fillna(0)
 daily["Date"] = pd.to_datetime(daily["Date"], errors="coerce")
+_daily_aht = (
+    items_period.groupby("Date_Closed")["HandleSec"].mean()
+    .reset_index()
+    .rename(columns={"Date_Closed": "Date", "HandleSec": "AvgHandleSec"})
+)
+_daily_aht["Date"] = pd.to_datetime(_daily_aht["Date"], errors="coerce")
+daily = daily.merge(_daily_aht, on="Date", how="left")
 daily = daily.dropna(subset=["Date"]).copy()
 daily["Items_Handled"] = daily["Items_Handled"].astype(int)
 daily["Emails_Received"] = daily["Emails_Received"].astype(int)
@@ -696,16 +703,25 @@ daily_display = daily.copy()
 if len(daily_display) > 0:
     daily_display["Date"] = daily_display["Date"].dt.date
     daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
-
-    daily_display = daily_display.rename(
-        columns={
-            "Date": "Date",
+    if is_dept_view:
+        daily_display = daily_display.rename(columns={
             "Emails_Received": "Received",
             "Items_Handled": "Handled",
             "Available_Hours": "Avail. Hours",
-        }
+        })
+        _show_cols = ["Date", "Received", "Handled", "Avail. Hours", "DateLabel"]
+    else:
+        daily_display["AHT"] = daily_display["AvgHandleSec"].apply(mmss)
+        daily_display = daily_display.rename(columns={
+            "Items_Handled": "Handled",
+            "Available_Hours": "Avail. Hours",
+        })
+        _show_cols = ["Date", "Handled", "AHT", "Avail. Hours"]
+    _show_cols = [c for c in _show_cols if c in daily_display.columns]
+    st.dataframe(
+        daily_display[_show_cols].sort_values("Date", ascending=True),
+        use_container_width=True, hide_index=True
     )
-    st.dataframe(daily_display.sort_values("Date", ascending=True), use_container_width=True, hide_index=True)
 else:
     st.info("No daily records found for the selected date range.")
 

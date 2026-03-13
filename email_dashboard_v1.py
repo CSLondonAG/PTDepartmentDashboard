@@ -288,12 +288,23 @@ avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 # Presence subsets (scoped to selected window for agent coverage)
 pres_in_window = pres[(pres["StartDT"] < end_ts) & (pres["EndDT"].fillna(end_ts) > start_ts)].copy()
 
+# Capture all pres names in window before agent filter (used for debug output below)
+_pres_window_names = (
+    pres_in_window["Created By: Full Name"].dropna().astype(str).unique()
+    if not is_dept_view else []
+)
+_matching_pres_names: set = set()
+
 if not is_dept_view:
     _agent_key = _parse_name(selected_agent)
-    _matching_pres_names = {
-        n for n in pres_in_window["Created By: Full Name"].dropna().astype(str).unique()
-        if _parse_name(n) == _agent_key
-    }
+    # Primary: match first + last
+    _matching_pres_names = {n for n in _pres_window_names if _parse_name(n) == _agent_key}
+    # Fallback: last name only (handles nickname / shortened first name)
+    if not _matching_pres_names and _agent_key[1]:
+        _matching_pres_names = {
+            n for n in _pres_window_names
+            if _parse_name(n)[1] == _agent_key[1]
+        }
     pres_in_window = pres_in_window[
         pres_in_window["Created By: Full Name"].isin(_matching_pres_names)
     ].copy()
@@ -644,6 +655,20 @@ else:
 
 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
 with st.expander("Data Quality", expanded=False):
+    if not is_dept_view:
+        st.markdown("**Presence Name Matching**")
+        _dbg_col1, _dbg_col2 = st.columns(2)
+        with _dbg_col1:
+            st.caption(f"Selected agent (items): `{selected_agent}`")
+            st.caption(f"Parsed key: `{_parse_name(selected_agent)}`")
+            st.caption(f"Matched pres names: {_matching_pres_names if _matching_pres_names else '⚠️ None — names do not match across files'}")
+        with _dbg_col2:
+            _dbg_rows = [{"Presence Name": n, "Parsed Key": str(_parse_name(n))} for n in list(_pres_window_names)[:20]]
+            if _dbg_rows:
+                st.dataframe(pd.DataFrame(_dbg_rows), hide_index=True, use_container_width=True)
+            else:
+                st.caption("No presence rows found in selected date window.")
+        st.divider()
     st.markdown(
         "<p style='color:#6b7280;font-size:0.82rem;margin-bottom:8px;'>Rows excluded due to unparseable timestamps — review source data if counts are high.</p>",
         unsafe_allow_html=True,

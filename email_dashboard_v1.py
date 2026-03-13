@@ -322,9 +322,12 @@ online_hours = online_sec / 3600
 # If Presence is missing some agents, handle time from those agents must not be included.
 presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
 _pres_name_keys = {_parse_name(n) for n in presence_agents}
-items_for_util = items_period[
-    items_period["User: Full Name"].astype(str).apply(lambda n: _parse_name(n) in _pres_name_keys)
-].copy()
+_util_mask = (
+    items_period["User: Full Name"].astype(str)
+    .apply(lambda n: _parse_name(n) in _pres_name_keys)
+    .astype(bool)
+)
+items_for_util = items_period[_util_mask].copy()
 
 total_handle_sec = items_for_util["HandleSec"].sum()
 util = (total_handle_sec / online_sec) if online_sec > 0 else 0
@@ -724,6 +727,86 @@ if len(daily_display) > 0:
     )
 else:
     st.info("No daily records found for the selected date range.")
+
+# ── Department-level agent performance charts ──
+if is_dept_view and len(items_period) > 0:
+    st.subheader("Agent Performance")
+    agent_perf_col1, agent_perf_col2 = st.columns(2)
+
+    # --- AHT per agent ---
+    agent_aht = (
+        items_period.groupby("User: Full Name")["HandleSec"]
+        .mean()
+        .reset_index()
+        .rename(columns={"User: Full Name": "Agent", "HandleSec": "AvgHandleSec"})
+    )
+    agent_aht = agent_aht[agent_aht["AvgHandleSec"].notna()].copy()
+    agent_aht["AHT_minutes"] = agent_aht["AvgHandleSec"] / 60
+    agent_aht["AHT_label"] = agent_aht["AvgHandleSec"].apply(mmss)
+    agent_aht = agent_aht.sort_values("AvgHandleSec", ascending=False).reset_index(drop=True)
+
+    with agent_perf_col1:
+        st.markdown("**Avg Handle Time by Agent**")
+        if len(agent_aht) > 0:
+            _aht_sort = agent_aht["Agent"].tolist()
+            aht_bar = alt.Chart(agent_aht).mark_bar(
+                color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+            ).encode(
+                x=alt.X("Agent:N", title="Agent", sort=_aht_sort,
+                        axis=alt.Axis(labelAngle=-35, labelPadding=6, labelLimit=120)),
+                y=alt.Y("AHT_minutes:Q", title="Avg Handle Time (mins)",
+                        axis=alt.Axis(format=".1f", titlePadding=12)),
+                tooltip=["Agent", alt.Tooltip("AHT_label:N", title="AHT (mm:ss)")],
+            )
+            aht_labels = alt.Chart(agent_aht).mark_text(dy=-8, fontSize=10, color="#15803d").encode(
+                x=alt.X("Agent:N", sort=_aht_sort),
+                y=alt.Y("AHT_minutes:Q"),
+                text=alt.Text("AHT_label:N"),
+            )
+            st.altair_chart(
+                alt.layer(aht_bar, aht_labels).properties(height=340),
+                use_container_width=True,
+            )
+        else:
+            st.info("No handle time data available.")
+
+    # --- Available hours per agent ---
+    if not pres_avail.empty:
+        _agent_avail_rows = []
+        for _pres_agent, _pres_grp in pres_avail.groupby("Created By: Full Name"):
+            _secs = seconds_in_window(_pres_grp, start_ts, end_ts)
+            _agent_avail_rows.append({"Agent": _pres_agent, "Available_Hours": _secs / 3600})
+        agent_avail_df = pd.DataFrame(_agent_avail_rows)
+        agent_avail_df = agent_avail_df[agent_avail_df["Available_Hours"] > 0].sort_values(
+            "Available_Hours", ascending=False
+        ).reset_index(drop=True)
+    else:
+        agent_avail_df = pd.DataFrame(columns=["Agent", "Available_Hours"])
+
+    with agent_perf_col2:
+        st.markdown("**Available Hours by Agent**")
+        if len(agent_avail_df) > 0:
+            _avail_sort = agent_avail_df["Agent"].tolist()
+            avail_bar = alt.Chart(agent_avail_df).mark_bar(
+                color="#0d9488", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+            ).encode(
+                x=alt.X("Agent:N", title="Agent", sort=_avail_sort,
+                        axis=alt.Axis(labelAngle=-35, labelPadding=6, labelLimit=120)),
+                y=alt.Y("Available_Hours:Q", title="Available Hours",
+                        axis=alt.Axis(format=".1f", titlePadding=12)),
+                tooltip=["Agent", alt.Tooltip("Available_Hours:Q", format=".1f", title="Avail. Hours")],
+            )
+            avail_labels = alt.Chart(agent_avail_df).mark_text(dy=-8, fontSize=10, color="#0d9488").encode(
+                x=alt.X("Agent:N", sort=_avail_sort),
+                y=alt.Y("Available_Hours:Q"),
+                text=alt.Text("Available_Hours:Q", format=".1f"),
+            )
+            st.altair_chart(
+                alt.layer(avail_bar, avail_labels).properties(height=340),
+                use_container_width=True,
+            )
+        else:
+            st.info("No presence / available-hours data for the selected period.")
 
 st.markdown("<div style='margin-top:2rem;'></div>", unsafe_allow_html=True)
 with st.expander("Data Quality", expanded=False):

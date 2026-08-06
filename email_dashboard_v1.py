@@ -19,6 +19,8 @@ BUSINESS_START_HOUR = 7
 BUSINESS_END_HOUR = 22
 SLA_TARGET_HOURS = 8
 SLA_TARGET_SECONDS = SLA_TARGET_HOURS * 3600
+SLA_COMPLIANCE_WEIGHT = 0.60
+SLA_RESPONSE_TIME_WEIGHT = 0.40
 
 st.markdown(
     """
@@ -115,6 +117,65 @@ def hm(sec):
     h = int(sec) // 3600
     m = (int(sec) % 3600) // 60
     return f"{h}h {m:02}m"
+
+
+def calculate_email_sla_score(response_hours: pd.Series) -> dict:
+    """Calculate a normalized 0-100 Email SLA Score with a genuine 60/40 split.
+
+    Components:
+      compliance_score = fraction_within_target * 100
+      response_time_score = min(100, target_hours / average_response_hours * 100)
+      score = 0.60 * compliance_score + 0.40 * response_time_score
+
+    Both components are bounded to 0-100 before weighting, so compliance can
+    contribute at most 60 points and response-time performance at most 40.
+    """
+    hours = pd.to_numeric(response_hours, errors="coerce").dropna()
+    hours = hours[hours >= 0]
+    total = int(len(hours))
+    if total == 0:
+        return {
+            "eligible": 0,
+            "met": 0,
+            "missed": 0,
+            "within_fraction": np.nan,
+            "avg_response_hours": np.nan,
+            "compliance_score": np.nan,
+            "response_time_score": np.nan,
+            "compliance_points": np.nan,
+            "response_time_points": np.nan,
+            "score": np.nan,
+        }
+
+    met = int((hours <= SLA_TARGET_HOURS).sum())
+    within_fraction = met / total
+    avg_response_hours = float(hours.mean())
+
+    compliance_score = max(0.0, min(100.0, within_fraction * 100.0))
+    if avg_response_hours <= 0:
+        response_time_score = 100.0
+    else:
+        response_time_score = max(
+            0.0,
+            min(100.0, (SLA_TARGET_HOURS / avg_response_hours) * 100.0),
+        )
+
+    compliance_points = SLA_COMPLIANCE_WEIGHT * compliance_score
+    response_time_points = SLA_RESPONSE_TIME_WEIGHT * response_time_score
+    score = compliance_points + response_time_points
+
+    return {
+        "eligible": total,
+        "met": met,
+        "missed": total - met,
+        "within_fraction": within_fraction,
+        "avg_response_hours": avg_response_hours,
+        "compliance_score": compliance_score,
+        "response_time_score": response_time_score,
+        "compliance_points": compliance_points,
+        "response_time_points": response_time_points,
+        "score": score,
+    }
 
 
 def seconds_in_window(pres_df: pd.DataFrame, window_start: pd.Timestamp, window_end: pd.Timestamp) -> float:
@@ -214,6 +275,7 @@ pres = pres.copy()
 title_col, refresh_col = st.columns([5, 1])
 with title_col:
     st.title("Email Department Performance")
+    st.caption("SLA model: 8 business hours · normalized 60/40 score · version 2026-08-06")
 with refresh_col:
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     if st.button("Refresh Data", use_container_width=True):
@@ -283,20 +345,84 @@ if len(completed_emails) > 0:
 else:
     completed_emails["ResponseTimeBusinessSec"] = pd.Series(dtype=float)
 
-# SLA score: completed emails answered within the fixed 8-business-hour target.
-# Invalid/open-ended response times are excluded from both the numerator and denominator.
+# Normalized Email SLA Score with a genuine 60/40 split and an
+# 8-business-hour target. Invalid response times are excluded.
 valid_completed_emails = completed_emails[
     completed_emails["ResponseTimeBusinessSec"].notna()
 ].copy()
+valid_completed_emails["ResponseTimeBusinessHours"] = (
+    valid_completed_emails["ResponseTimeBusinessSec"] / 3600.0
+)
 valid_completed_emails["SLA_Met"] = (
-    valid_completed_emails["ResponseTimeBusinessSec"] <= SLA_TARGET_SECONDS
+    valid_completed_emails["ResponseTimeBusinessHours"] <= SLA_TARGET_HOURS
 )
 
-sla_eligible = len(valid_completed_emails)
-sla_met = int(valid_completed_emails["SLA_Met"].sum()) if sla_eligible > 0 else 0
-sla_missed = sla_eligible - sla_met
-sla_score = (sla_met / sla_eligible) if sla_eligible > 0 else np.nan
-avg_art = valid_completed_emails["ResponseTimeBusinessSec"].mean() if sla_eligible > 0 else 0
+_period_sla = calculate_email_sla_score(valid_completed_emails["ResponseTimeBusinessHours"])
+sla_eligible = _period_sla["eligible"]
+sla_met = _period_sla["met"]
+sla_missed = _period_sla["missed"]
+sla_compliance = _period_sla["within_fraction"]
+sla_avg_response_hours = _period_sla["avg_response_hours"]
+sla_period_compliance_score = _period_sla["compliance_score"]
+sla_period_response_time_score = _period_sla["response_time_score"]
+avg_art = sla_avg_response_hours * 3600 if pd.notna(sla_avg_response_hours) else 0
+
+# Calculate one SLA score per day, then volume-weight the daily scores across
+# the selected period, as in the reference department dashboard.
+_daily_sla_rows = []
+if sla_eligible > 0:
+    for _sla_date, _sla_group in valid_completed_emails.groupby("Date_Opened", dropna=True):
+        _components = calculate_email_sla_score(_sla_group["ResponseTimeBusinessHours"])
+        _daily_sla_rows.append({
+            "Date": pd.to_datetime(_sla_date, errors="coerce"),
+            "SLA_Eligible": _components["eligible"],
+            "SLA_Met": _components["met"],
+            "SLA_Missed": _components["missed"],
+            "SLA_Compliance": _components["within_fraction"],
+            "SLA_Avg_Response_Hours": _components["avg_response_hours"],
+            "SLA_Compliance_Score": _components["compliance_score"],
+            "SLA_Response_Time_Score": _components["response_time_score"],
+            "SLA_Compliance_Points": _components["compliance_points"],
+            "SLA_Response_Time_Points": _components["response_time_points"],
+            "Email_SLA_Score": _components["score"],
+        })
+
+_daily_sla = pd.DataFrame(_daily_sla_rows)
+if _daily_sla.empty:
+    _daily_sla = pd.DataFrame({
+        "Date": pd.Series(dtype="datetime64[ns]"),
+        "SLA_Eligible": pd.Series(dtype="int64"),
+        "SLA_Met": pd.Series(dtype="int64"),
+        "SLA_Missed": pd.Series(dtype="int64"),
+        "SLA_Compliance": pd.Series(dtype="float64"),
+        "SLA_Avg_Response_Hours": pd.Series(dtype="float64"),
+        "SLA_Compliance_Score": pd.Series(dtype="float64"),
+        "SLA_Response_Time_Score": pd.Series(dtype="float64"),
+        "SLA_Compliance_Points": pd.Series(dtype="float64"),
+        "SLA_Response_Time_Points": pd.Series(dtype="float64"),
+        "Email_SLA_Score": pd.Series(dtype="float64"),
+    })
+    email_sla_score = np.nan
+    weighted_compliance_score = np.nan
+    weighted_response_time_score = np.nan
+else:
+    _daily_sla = _daily_sla.sort_values("Date").reset_index(drop=True)
+    _daily_weight = _daily_sla["SLA_Eligible"].sum()
+    email_sla_score = (
+        (_daily_sla["Email_SLA_Score"] * _daily_sla["SLA_Eligible"]).sum() / _daily_weight
+        if _daily_weight > 0 else np.nan
+    )
+
+    # Weighted component scores are kept separately so they add back exactly
+    # to the displayed headline SLA Score.
+    weighted_compliance_score = (
+        (_daily_sla["SLA_Compliance_Score"] * _daily_sla["SLA_Eligible"]).sum() / _daily_weight
+        if _daily_weight > 0 else np.nan
+    )
+    weighted_response_time_score = (
+        (_daily_sla["SLA_Response_Time_Score"] * _daily_sla["SLA_Eligible"]).sum() / _daily_weight
+        if _daily_weight > 0 else np.nan
+    )
 
 sla_status_summary = pd.DataFrame(
     {
@@ -394,10 +520,13 @@ st.markdown(
 )
 
 # ── Primary metrics (top tier) ──
-sla_display = f"{sla_score:.1%}" if pd.notna(sla_score) else "—"
+sla_display = f"{email_sla_score:.1f}" if pd.notna(email_sla_score) else "—"
+sla_compliance_display = f"{sla_compliance:.1%}" if pd.notna(sla_compliance) else "—"
 sla_help = (
-    f"Completed emails answered within {SLA_TARGET_HOURS} business hours, divided by "
-    "completed emails with a valid business-hour response time."
+    f"Daily-volume weighted 0–100 Email SLA Score: 60% from the share replied "
+    f"within {SLA_TARGET_HOURS} business hours and 40% from normalized average "
+    f"response time. The response component scores 100 at or below {SLA_TARGET_HOURS}h "
+    f"and declines proportionally above target."
 )
 
 if is_dept_view:
@@ -405,12 +534,12 @@ if is_dept_view:
     c1.metric("Emails Received", f"{total_received:,}")
     c2.metric("Work Items Handled", f"{total_handled:,}")
     c3.metric("Avg Response Time (BH)", hm(avg_art))
-    c4.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display, help=sla_help)
+    c4.metric("Email SLA Score (60/40)", sla_display, help=sla_help)
 else:
     c1, c2, c3 = st.columns(3)
     c1.metric("Work Items Handled", f"{total_handled:,}")
     c2.metric("Avg Response Time (BH)", hm(avg_art))
-    c3.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display, help=sla_help)
+    c3.metric("Email SLA Score (60/40)", sla_display, help=sla_help)
 
 # ── Secondary metrics (contextual) ──
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
@@ -454,21 +583,10 @@ _daily_aht = (
 _daily_aht["Date"] = pd.to_datetime(_daily_aht["Date"], errors="coerce")
 daily = daily.merge(_daily_aht, on="Date", how="left")
 
-if sla_eligible > 0:
-    _daily_sla = (
-        valid_completed_emails.groupby("Date_Opened", dropna=True)
-        .agg(SLA_Eligible=("SLA_Met", "size"), SLA_Met=("SLA_Met", "sum"))
-        .reset_index()
-        .rename(columns={"Date_Opened": "Date"})
-    )
-    _daily_sla["Date"] = pd.to_datetime(_daily_sla["Date"], errors="coerce")
-    _daily_sla["SLA_8h"] = _daily_sla["SLA_Met"] / _daily_sla["SLA_Eligible"]
-else:
-    _daily_sla = pd.DataFrame(columns=["Date", "SLA_Eligible", "SLA_Met", "SLA_8h"])
-
 daily = daily.merge(_daily_sla, on="Date", how="left")
 daily["SLA_Eligible"] = daily["SLA_Eligible"].fillna(0).astype(int)
 daily["SLA_Met"] = daily["SLA_Met"].fillna(0).astype(int)
+daily["SLA_Missed"] = daily["SLA_Missed"].fillna(0).astype(int)
 daily = daily.dropna(subset=["Date"]).copy()
 daily["Items_Handled"] = daily["Items_Handled"].astype(int)
 daily["Emails_Received"] = daily["Emails_Received"].astype(int)
@@ -627,9 +745,54 @@ else:
 st.subheader("SLA Performance")
 if sla_eligible > 0:
     sla_m1, sla_m2, sla_m3 = st.columns(3)
-    sla_m1.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display)
-    sla_m2.metric("SLA Met", f"{sla_met:,}")
-    sla_m3.metric("SLA Missed", f"{sla_missed:,}")
+    sla_m1.metric("Email SLA Score (60/40)", sla_display, help=sla_help)
+    sla_m2.metric(
+        f"Replied ≤{SLA_TARGET_HOURS}h",
+        sla_compliance_display,
+        help=f"{sla_met:,} of {sla_eligible:,} eligible completed emails met the target."
+    )
+    sla_m3.metric(
+        "Avg Response Time (BH)",
+        hm(avg_art),
+        help=(
+            f"Normalized response score: {weighted_response_time_score:.1f}/100. "
+            f"This contributes up to 40 points to the SLA Score; averages at or below "
+            f"{SLA_TARGET_HOURS} business hours receive the full response-time component."
+        )
+    )
+
+    if not _daily_sla.empty:
+        _sla_trend = _daily_sla.dropna(subset=["Date", "Email_SLA_Score"]).copy()
+        _trend_line = alt.Chart(_sla_trend).mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=70), color="#15803d", strokeWidth=3
+        ).encode(
+            x=alt.X("Date:T", title="Date", axis=alt.Axis(format="%d %b", labelAngle=-45)),
+            y=alt.Y("Email_SLA_Score:Q", title="Email SLA Score", scale=alt.Scale(domain=[0, 105])),
+            tooltip=[
+                alt.Tooltip("Date:T", title="Date", format="%d %b %Y"),
+                alt.Tooltip("Email_SLA_Score:Q", title="SLA Score", format=".1f"),
+                alt.Tooltip("SLA_Compliance:Q", title=f"Replied ≤{SLA_TARGET_HOURS}h", format=".1%"),
+                alt.Tooltip("SLA_Avg_Response_Hours:Q", title="Avg Response (h)", format=".2f"),
+                alt.Tooltip("SLA_Compliance_Points:Q", title="Compliance Points", format=".1f"),
+                alt.Tooltip("SLA_Response_Time_Points:Q", title="Response Points", format=".1f"),
+                alt.Tooltip("SLA_Eligible:Q", title="Eligible Emails", format=","),
+            ],
+        )
+        _trend_labels = alt.Chart(_sla_trend).mark_text(
+            dy=-10, color="#15803d", fontSize=10
+        ).encode(
+            x=alt.X("Date:T"),
+            y=alt.Y("Email_SLA_Score:Q"),
+            text=alt.Text("Email_SLA_Score:Q", format=".1f"),
+        )
+        _target_rule = alt.Chart(pd.DataFrame({"Target": [80]})).mark_rule(
+            color="#dc2626", strokeDash=[5, 5]
+        ).encode(y="Target:Q")
+        st.altair_chart(
+            alt.layer(_trend_line, _trend_labels, _target_rule).properties(height=300),
+            use_container_width=True,
+        )
+        st.caption("Daily Email SLA Score trend. Dashed line shows a score of 80.")
 
     sla_status_chart = alt.Chart(sla_status_summary).mark_bar(
         cornerRadiusTopLeft=4,
@@ -693,8 +856,12 @@ if sla_eligible > 0:
 
     _sla_note = "" if is_dept_view or _email_agent_col else " Showing department-level data (no agent column detected in email export)."
     st.caption(
-        f"SLA score = completed emails answered within {SLA_TARGET_HOURS} business hours ÷ completed emails with a valid response time. "
-        f"Business hours are {BUSINESS_START_HOUR:02d}:00–{BUSINESS_END_HOUR:02d}:00, weekends included."
+        f"Email SLA Score is a normalized 60/40 measure. Compliance contributes up to 60 points "
+        f"({SLA_COMPLIANCE_WEIGHT:.0%} × the percentage replied within {SLA_TARGET_HOURS} business hours). "
+        f"Average response performance contributes up to 40 points "
+        f"({SLA_RESPONSE_TIME_WEIGHT:.0%} × min(100, {SLA_TARGET_HOURS} ÷ average response hours × 100)). "
+        f"Daily scores are weighted by eligible completed-email volume. Business hours are "
+        f"{BUSINESS_START_HOUR:02d}:00–{BUSINESS_END_HOUR:02d}:00, weekends included."
         + _sla_note
     )
 else:
@@ -929,8 +1096,14 @@ with st.expander("Daily Breakdown", expanded=False):
     if len(daily_display) > 0:
         daily_display["Date"] = daily_display["Date"].dt.date
         daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
-        daily_display[f"{SLA_TARGET_HOURS}h SLA"] = daily_display["SLA_8h"].apply(
+        daily_display["Email SLA Score"] = daily_display["Email_SLA_Score"].apply(
+            lambda value: f"{value:.1f}" if pd.notna(value) else "—"
+        )
+        daily_display[f"Replied ≤{SLA_TARGET_HOURS}h"] = daily_display["SLA_Compliance"].apply(
             lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+        )
+        daily_display["Response Score"] = daily_display["SLA_Response_Time_Score"].apply(
+            lambda value: f"{value:.1f}" if pd.notna(value) else "—"
         )
         if is_dept_view:
             daily_display = daily_display.rename(columns={
@@ -938,14 +1111,20 @@ with st.expander("Daily Breakdown", expanded=False):
                 "Items_Handled": "Handled",
                 "Available_Hours": "Avail. Hours",
             })
-            _show_cols = ["Date", "Received", "Handled", f"{SLA_TARGET_HOURS}h SLA", "Avail. Hours", "DateLabel"]
+            _show_cols = [
+                "Date", "Received", "Handled", "Email SLA Score",
+                f"Replied ≤{SLA_TARGET_HOURS}h", "Response Score", "Avail. Hours", "DateLabel"
+            ]
         else:
             daily_display["AHT"] = daily_display["AvgHandleSec"].apply(mmss)
             daily_display = daily_display.rename(columns={
                 "Items_Handled": "Handled",
                 "Available_Hours": "Avail. Hours",
             })
-            _show_cols = ["Date", "Handled", "AHT", f"{SLA_TARGET_HOURS}h SLA", "Avail. Hours"]
+            _show_cols = [
+                "Date", "Handled", "AHT", "Email SLA Score",
+                f"Replied ≤{SLA_TARGET_HOURS}h", "Response Score", "Avail. Hours"
+            ]
         _show_cols = [c for c in _show_cols if c in daily_display.columns]
         st.dataframe(
             daily_display[_show_cols].sort_values("Date", ascending=True),

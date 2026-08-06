@@ -497,16 +497,6 @@ items_for_util = items_period[_util_mask].copy()
 total_handle_sec = items_for_util["HandleSec"].sum()
 util = (total_handle_sec / util_presence_sec) if util_presence_sec > 0 else 0
 
-# Presence coverage remains a data-quality match against all non-Offline presence rows.
-presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
-_pres_name_keys = {_parse_name(n) for n in presence_agents}
-
-# Coverage indicator (internal diagnostic; shown as metric)
-items_agents = set(items_period["User: Full Name"].dropna().astype(str).unique().tolist())
-_items_name_keys = {_parse_name(n) for n in items_agents}
-covered_agents = sum(1 for k in _items_name_keys if k in _pres_name_keys)
-coverage = (covered_agents / len(_items_name_keys)) if len(_items_name_keys) > 0 else 0
-
 email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
 items_invalid_close = items_period["CloseDT"].isna().sum()
@@ -566,19 +556,24 @@ else:
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
 s1, s2, s3, s4 = st.columns(4)
 s1.metric("Avg Handle Time", mmss(avg_aht))
-s2.metric("Online Hours", f"{online_hours:.1f}")
+s2.metric(
+    "Online Hours",
+    f"{online_hours:.1f}",
+    help="Total presence time excluding Offline status.",
+)
 s3.metric(
+    "Available Hours",
+    f"{available_hours:.1f}",
+    help="Time in Available_Email_and_Web or Available_All status.",
+)
+s4.metric(
     "Utilisation",
     f"{util:.1%}",
     help=(
         "Email handle time divided by matched presence time after excluding "
-        "Offline and all Busy* statuses. Online Hours remains all non-Offline time."
+        "Offline and all Busy* statuses."
     ),
 )
-if is_dept_view:
-    s4.metric("Presence Coverage", f"{coverage:.0%}")
-else:
-    s4.metric("In Presence Data", "Yes" if coverage > 0 else "No")
 
 # Show name-match diagnostic inline when presence data is missing for the selected agent
 if not is_dept_view and not _matching_pres_names:

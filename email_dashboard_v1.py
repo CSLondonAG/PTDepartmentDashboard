@@ -17,6 +17,8 @@ OFFLINE_STATUSES = {"Offline"}  # extend if your export includes other offline-l
 
 BUSINESS_START_HOUR = 7
 BUSINESS_END_HOUR = 22
+SLA_TARGET_HOURS = 8
+SLA_TARGET_SECONDS = SLA_TARGET_HOURS * 3600
 
 st.markdown(
     """
@@ -278,10 +280,30 @@ if len(completed_emails) > 0:
     completed_emails["ResponseTimeBusinessSec"] = completed_emails.apply(
         lambda r: business_seconds_between(r["OpenedDT"], r["CompletedDT"]), axis=1
     )
-    avg_art = completed_emails["ResponseTimeBusinessSec"].mean()
 else:
     completed_emails["ResponseTimeBusinessSec"] = pd.Series(dtype=float)
-    avg_art = 0
+
+# SLA score: completed emails answered within the fixed 8-business-hour target.
+# Invalid/open-ended response times are excluded from both the numerator and denominator.
+valid_completed_emails = completed_emails[
+    completed_emails["ResponseTimeBusinessSec"].notna()
+].copy()
+valid_completed_emails["SLA_Met"] = (
+    valid_completed_emails["ResponseTimeBusinessSec"] <= SLA_TARGET_SECONDS
+)
+
+sla_eligible = len(valid_completed_emails)
+sla_met = int(valid_completed_emails["SLA_Met"].sum()) if sla_eligible > 0 else 0
+sla_missed = sla_eligible - sla_met
+sla_score = (sla_met / sla_eligible) if sla_eligible > 0 else np.nan
+avg_art = valid_completed_emails["ResponseTimeBusinessSec"].mean() if sla_eligible > 0 else 0
+
+sla_status_summary = pd.DataFrame(
+    {
+        "Status": [f"Met (≤{SLA_TARGET_HOURS}h)", f"Missed (>{SLA_TARGET_HOURS}h)"],
+        "Count": [sla_met, sla_missed],
+    }
+)
 
 avg_aht = items_period["HandleSec"].mean() if len(items_period) > 0 else 0
 
@@ -342,16 +364,25 @@ email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
 email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
 items_invalid_close = items_period["CloseDT"].isna().sum()
 
-if len(completed_emails) > 0:
-    closed_age_hours = completed_emails["ResponseTimeBusinessSec"] / 3600
-    aging_bins = [0, 4, 24, 72, np.inf]
-    aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
-    completed_emails["AgingBucket"] = pd.cut(closed_age_hours, bins=aging_bins, labels=aging_labels, right=False)
-    closed_aging_summary = completed_emails["AgingBucket"].value_counts().reindex(aging_labels, fill_value=0).reset_index()
+aging_labels = ["0-4h", "4-8h", "8-24h", "1-3d", "3d+"]
+if sla_eligible > 0:
+    closed_age_hours = valid_completed_emails["ResponseTimeBusinessSec"] / 3600
+    aging_bins = [-np.inf, 4, SLA_TARGET_HOURS, 24, 72, np.inf]
+    valid_completed_emails["AgingBucket"] = pd.cut(
+        closed_age_hours,
+        bins=aging_bins,
+        labels=aging_labels,
+        right=True,
+    )
+    closed_aging_summary = (
+        valid_completed_emails["AgingBucket"]
+        .value_counts()
+        .reindex(aging_labels, fill_value=0)
+        .reset_index()
+    )
     closed_aging_summary.columns = ["Bucket", "Count"]
 else:
-    aging_labels = ["0-4h", "4-24h", "1-3d", "3d+"]
-    closed_aging_summary = pd.DataFrame({"Bucket": aging_labels, "Count": [0] * 4})
+    closed_aging_summary = pd.DataFrame({"Bucket": aging_labels, "Count": [0] * len(aging_labels)})
 
 
 # ---------------- DISPLAY ----------------
@@ -363,15 +394,23 @@ st.markdown(
 )
 
 # ── Primary metrics (top tier) ──
+sla_display = f"{sla_score:.1%}" if pd.notna(sla_score) else "—"
+sla_help = (
+    f"Completed emails answered within {SLA_TARGET_HOURS} business hours, divided by "
+    "completed emails with a valid business-hour response time."
+)
+
 if is_dept_view:
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Emails Received", f"{total_received:,}")
     c2.metric("Work Items Handled", f"{total_handled:,}")
     c3.metric("Avg Response Time (BH)", hm(avg_art))
+    c4.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display, help=sla_help)
 else:
-    c2, c3 = st.columns(2)
-    c2.metric("Work Items Handled", f"{total_handled:,}")
-    c3.metric("Avg Response Time (BH)", hm(avg_art))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Work Items Handled", f"{total_handled:,}")
+    c2.metric("Avg Response Time (BH)", hm(avg_art))
+    c3.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display, help=sla_help)
 
 # ── Secondary metrics (contextual) ──
 st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
@@ -414,6 +453,22 @@ _daily_aht = (
 )
 _daily_aht["Date"] = pd.to_datetime(_daily_aht["Date"], errors="coerce")
 daily = daily.merge(_daily_aht, on="Date", how="left")
+
+if sla_eligible > 0:
+    _daily_sla = (
+        valid_completed_emails.groupby("Date_Opened", dropna=True)
+        .agg(SLA_Eligible=("SLA_Met", "size"), SLA_Met=("SLA_Met", "sum"))
+        .reset_index()
+        .rename(columns={"Date_Opened": "Date"})
+    )
+    _daily_sla["Date"] = pd.to_datetime(_daily_sla["Date"], errors="coerce")
+    _daily_sla["SLA_8h"] = _daily_sla["SLA_Met"] / _daily_sla["SLA_Eligible"]
+else:
+    _daily_sla = pd.DataFrame(columns=["Date", "SLA_Eligible", "SLA_Met", "SLA_8h"])
+
+daily = daily.merge(_daily_sla, on="Date", how="left")
+daily["SLA_Eligible"] = daily["SLA_Eligible"].fillna(0).astype(int)
+daily["SLA_Met"] = daily["SLA_Met"].fillna(0).astype(int)
 daily = daily.dropna(subset=["Date"]).copy()
 daily["Items_Handled"] = daily["Items_Handled"].astype(int)
 daily["Emails_Received"] = daily["Emails_Received"].astype(int)
@@ -570,12 +625,50 @@ else:
     st.info("No daily data available for the selected date range. Try adjusting the date picker above.")
 
 st.subheader("SLA Performance")
-if closed_aging_summary["Count"].sum() > 0:
+if sla_eligible > 0:
+    sla_m1, sla_m2, sla_m3 = st.columns(3)
+    sla_m1.metric(f"{SLA_TARGET_HOURS}h SLA Score", sla_display)
+    sla_m2.metric("SLA Met", f"{sla_met:,}")
+    sla_m3.metric("SLA Missed", f"{sla_missed:,}")
+
+    sla_status_chart = alt.Chart(sla_status_summary).mark_bar(
+        cornerRadiusTopLeft=4,
+        cornerRadiusTopRight=4,
+    ).encode(
+        x=alt.X("Status:N", title=None, sort=sla_status_summary["Status"].tolist()),
+        y=alt.Y("Count:Q", title="Completed Email Count"),
+        color=alt.Color(
+            "Status:N",
+            legend=None,
+            scale=alt.Scale(
+                domain=sla_status_summary["Status"].tolist(),
+                range=["#15803d", "#dc2626"],
+            ),
+        ),
+        tooltip=["Status", alt.Tooltip("Count:Q", format=",")],
+    )
+    sla_status_labels = alt.Chart(sla_status_summary).mark_text(
+        dy=-10,
+        fontSize=11,
+    ).encode(
+        x=alt.X("Status:N", sort=sla_status_summary["Status"].tolist()),
+        y=alt.Y("Count:Q"),
+        text=alt.Text("Count:Q", format=","),
+        color=alt.Color(
+            "Status:N",
+            legend=None,
+            scale=alt.Scale(
+                domain=sla_status_summary["Status"].tolist(),
+                range=["#15803d", "#dc2626"],
+            ),
+        ),
+    )
+
     closed_aging_bars = alt.Chart(closed_aging_summary).mark_bar(
         color="#15803d", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
     ).encode(
         x=alt.X("Bucket:N", title="Business-hour Response Bucket", sort=aging_labels),
-        y=alt.Y("Count:Q", title="Closed Email Count"),
+        y=alt.Y("Count:Q", title="Completed Email Count"),
         tooltip=["Bucket", "Count"],
     )
     closed_aging_labels = alt.Chart(closed_aging_summary).mark_text(
@@ -585,13 +678,29 @@ if closed_aging_summary["Count"].sum() > 0:
         y=alt.Y("Count:Q"),
         text=alt.Text("Count:Q", format=","),
     )
-    closed_aging_chart = alt.layer(closed_aging_bars, closed_aging_labels).properties(height=340)
-    st.altair_chart(closed_aging_chart, use_container_width=True)
+
+    sla_chart_col, aging_chart_col = st.columns([1, 2])
+    with sla_chart_col:
+        st.altair_chart(
+            alt.layer(sla_status_chart, sla_status_labels).properties(height=340),
+            use_container_width=True,
+        )
+    with aging_chart_col:
+        st.altair_chart(
+            alt.layer(closed_aging_bars, closed_aging_labels).properties(height=340),
+            use_container_width=True,
+        )
+
     _sla_note = "" if is_dept_view or _email_agent_col else " Showing department-level data (no agent column detected in email export)."
-    st.caption("Closed emails grouped by business-hour response time." + _sla_note)
+    st.caption(
+        f"SLA score = completed emails answered within {SLA_TARGET_HOURS} business hours ÷ completed emails with a valid response time. "
+        f"Business hours are {BUSINESS_START_HOUR:02d}:00–{BUSINESS_END_HOUR:02d}:00, weekends included."
+        + _sla_note
+    )
 else:
     st.info(
-        "No closed emails with response time data for the selected period. Adjust the date range or check that completion timestamps are present."
+        "No completed emails with a valid business-hour response time for the selected period. "
+        "Adjust the date range or check that opened and completion timestamps are present."
     )
 
 st.subheader("Case Category & Reason Breakdown")
@@ -820,20 +929,23 @@ with st.expander("Daily Breakdown", expanded=False):
     if len(daily_display) > 0:
         daily_display["Date"] = daily_display["Date"].dt.date
         daily_display["Available_Hours"] = daily_display["Available_Hours"].round(1)
+        daily_display[f"{SLA_TARGET_HOURS}h SLA"] = daily_display["SLA_8h"].apply(
+            lambda value: f"{value:.1%}" if pd.notna(value) else "—"
+        )
         if is_dept_view:
             daily_display = daily_display.rename(columns={
                 "Emails_Received": "Received",
                 "Items_Handled": "Handled",
                 "Available_Hours": "Avail. Hours",
             })
-            _show_cols = ["Date", "Received", "Handled", "Avail. Hours", "DateLabel"]
+            _show_cols = ["Date", "Received", "Handled", f"{SLA_TARGET_HOURS}h SLA", "Avail. Hours", "DateLabel"]
         else:
             daily_display["AHT"] = daily_display["AvgHandleSec"].apply(mmss)
             daily_display = daily_display.rename(columns={
                 "Items_Handled": "Handled",
                 "Available_Hours": "Avail. Hours",
             })
-            _show_cols = ["Date", "Handled", "AHT", "Avail. Hours"]
+            _show_cols = ["Date", "Handled", "AHT", f"{SLA_TARGET_HOURS}h SLA", "Avail. Hours"]
         _show_cols = [c for c in _show_cols if c in daily_display.columns]
         st.dataframe(
             daily_display[_show_cols].sort_values("Date", ascending=True),

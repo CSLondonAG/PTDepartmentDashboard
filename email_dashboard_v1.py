@@ -457,28 +457,49 @@ if not is_dept_view:
         pres_in_window["Created By: Full Name"].isin(_matching_pres_names)
     ].copy()
 
-pres_avail = pres_in_window[pres_in_window["Service Presence Status: Developer Name"].isin(AVAILABLE_STATUSES)].copy()
-pres_online = pres_in_window[~pres_in_window["Service Presence Status: Developer Name"].isin(OFFLINE_STATUSES)].copy()
+_presence_status = (
+    pres_in_window["Service Presence Status: Developer Name"]
+    .fillna("")
+    .astype(str)
+    .str.strip()
+)
+_offline_mask = _presence_status.isin(OFFLINE_STATUSES)
+# Treat every status beginning with "Busy" as unavailable for utilisation,
+# including Busy_Lunch, Busy_Break, Busy_Meeting and future Busy_* statuses.
+_busy_mask = _presence_status.str.casefold().str.startswith("busy")
+
+pres_avail = pres_in_window[_presence_status.isin(AVAILABLE_STATUSES)].copy()
+pres_online = pres_in_window[~_offline_mask].copy()
+pres_util_base = pres_in_window[~_offline_mask & ~_busy_mask].copy()
 
 available_sec = seconds_in_window(pres_avail, start_ts, end_ts)
 available_hours = available_sec / 3600
 
+# Online Hours remains all non-Offline presence time for context.
 online_sec = seconds_in_window(pres_online, start_ts, end_ts)
 online_hours = online_sec / 3600
 
-# Utilisation fix: align numerator to the same agent population present in Presence export.
-# If Presence is missing some agents, handle time from those agents must not be included.
-presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
-_pres_name_keys = {_parse_name(n) for n in presence_agents}
+# Utilisation denominator excludes Offline and all Busy* statuses.
+util_presence_sec = seconds_in_window(pres_util_base, start_ts, end_ts)
+
+# Align the handle-time numerator to agents represented in the utilisation presence base.
+util_presence_agents = set(
+    pres_util_base["Created By: Full Name"].dropna().astype(str).unique().tolist()
+)
+_util_pres_name_keys = {_parse_name(n) for n in util_presence_agents}
 _util_mask = (
     items_period["User: Full Name"].astype(str)
-    .apply(lambda n: _parse_name(n) in _pres_name_keys)
+    .apply(lambda n: _parse_name(n) in _util_pres_name_keys)
     .astype(bool)
 )
 items_for_util = items_period[_util_mask].copy()
 
 total_handle_sec = items_for_util["HandleSec"].sum()
-util = (total_handle_sec / online_sec) if online_sec > 0 else 0
+util = (total_handle_sec / util_presence_sec) if util_presence_sec > 0 else 0
+
+# Presence coverage remains a data-quality match against all non-Offline presence rows.
+presence_agents = set(pres_online["Created By: Full Name"].dropna().astype(str).unique().tolist())
+_pres_name_keys = {_parse_name(n) for n in presence_agents}
 
 # Coverage indicator (internal diagnostic; shown as metric)
 items_agents = set(items_period["User: Full Name"].dropna().astype(str).unique().tolist())
@@ -546,7 +567,14 @@ st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
 s1, s2, s3, s4 = st.columns(4)
 s1.metric("Avg Handle Time", mmss(avg_aht))
 s2.metric("Online Hours", f"{online_hours:.1f}")
-s3.metric("Utilisation", f"{util:.1%}")
+s3.metric(
+    "Utilisation",
+    f"{util:.1%}",
+    help=(
+        "Email handle time divided by matched presence time after excluding "
+        "Offline and all Busy* statuses. Online Hours remains all non-Offline time."
+    ),
+)
 if is_dept_view:
     s4.metric("Presence Coverage", f"{coverage:.0%}")
 else:

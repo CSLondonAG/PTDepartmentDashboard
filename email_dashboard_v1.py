@@ -786,10 +786,30 @@ if sla_eligible > 0:
 
     if not _daily_sla.empty:
         _sla_trend = _daily_sla.dropna(subset=["Date", "Email_SLA_Score"]).copy()
+
+        # Explicitly show one x-axis tick per SLA date. Without this, Altair
+        # can generate multiple timestamp ticks within each day and then format
+        # them all with the same "%d %b" label.
+        _sla_tick_dates = (
+            _sla_trend["Date"]
+            .dropna()
+            .drop_duplicates()
+            .sort_values()
+            .tolist()
+        )
+
         _trend_line = alt.Chart(_sla_trend).mark_line(
             point=alt.OverlayMarkDef(filled=True, size=70), color="#15803d", strokeWidth=3
         ).encode(
-            x=alt.X("Date:T", title="Date", axis=alt.Axis(format="%d %b", labelAngle=-45)),
+            x=alt.X(
+                "Date:T",
+                title="Date",
+                axis=alt.Axis(
+                    format="%d %b",
+                    labelAngle=-45,
+                    values=_sla_tick_dates,
+                ),
+            ),
             y=alt.Y("Email_SLA_Score:Q", title="Email SLA Score", scale=alt.Scale(domain=[0, 105])),
             tooltip=[
                 alt.Tooltip("Date:T", title="Date", format="%d %b %Y"),
@@ -804,7 +824,7 @@ if sla_eligible > 0:
         _trend_labels = alt.Chart(_sla_trend).mark_text(
             dy=-10, color="#15803d", fontSize=10
         ).encode(
-            x=alt.X("Date:T"),
+            x=alt.X("Date:T", axis=None),
             y=alt.Y("Email_SLA_Score:Q"),
             text=alt.Text("Email_SLA_Score:Q", format=".1f"),
         )

@@ -15,8 +15,8 @@ CASE_CAT_FILE = "CaseCatPT.csv"
 AVAILABLE_STATUSES = {"Available_Email_and_Web", "Available_All"}
 OFFLINE_STATUSES = {"Offline"}  # extend if your export includes other offline-like values
 
-BUSINESS_START_HOUR = 7
-BUSINESS_END_HOUR = 22
+BUSINESS_START_HOUR = 8
+BUSINESS_END_HOUR = 20
 SLA_TARGET_HOURS = 8
 SLA_TARGET_SECONDS = SLA_TARGET_HOURS * 3600
 SLA_COMPLIANCE_WEIGHT = 0.60

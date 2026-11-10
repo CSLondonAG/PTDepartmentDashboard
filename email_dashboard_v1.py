@@ -288,8 +288,12 @@ days_since_sunday = (today.weekday() + 1) % 7
 last_sunday = today - pd.Timedelta(days=days_since_sunday if days_since_sunday > 0 else 7)
 week_start = last_sunday - pd.Timedelta(days=6)
 
-default_start = max(week_start, email_rec["Date_Opened"].min())
-default_end = min(last_sunday, email_rec["Date_Opened"].max())
+_email_activity_dates = pd.concat(
+    [email_rec["Date_Opened"], email_rec["Date_Completed"]],
+    ignore_index=True,
+).dropna()
+default_start = max(week_start, _email_activity_dates.min())
+default_end = min(last_sunday, _email_activity_dates.max())
 
 filter_col1, filter_col2 = st.columns([3, 2])
 with filter_col1:
@@ -311,7 +315,20 @@ with filter_col2:
 
 # ---------------- FILTERED DATA (DATE RANGE ONLY) ----------------
 
-email_rec_period = email_rec[(email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)].copy()
+# Received-volume metrics are attributed to the date the email was opened.
+email_received_period = email_rec[
+    (email_rec["Date_Opened"] >= start) & (email_rec["Date_Opened"] <= end)
+].copy()
+
+# SLA metrics are attributed to the date the email was responded to/completed.
+# An email opened before the selected period is included if it was responded to
+# inside the period. An email opened inside the period but responded to later is
+# excluded until the period containing its response date is selected.
+email_responded_period = email_rec[
+    email_rec["CompletedDT"].notna()
+    & (email_rec["Date_Completed"] >= start)
+    & (email_rec["Date_Completed"] <= end)
+].copy()
 case_cat_period = case_cat[(case_cat["Date_Opened"] >= start) & (case_cat["Date_Opened"] <= end)].copy()
 items_period = items[(items["Date_Closed"] >= start) & (items["Date_Closed"] <= end)].copy()
 
@@ -323,8 +340,11 @@ if not is_dept_view:
     items_period = items_period[items_period["User: Full Name"].astype(str) == selected_agent].copy()
     _agent_key = _parse_name(selected_agent)
     if _email_agent_col:
-        email_rec_period = email_rec_period[
-            email_rec_period[_email_agent_col].astype(str).apply(_parse_name) == _agent_key
+        email_received_period = email_received_period[
+            email_received_period[_email_agent_col].astype(str).apply(_parse_name) == _agent_key
+        ].copy()
+        email_responded_period = email_responded_period[
+            email_responded_period[_email_agent_col].astype(str).apply(_parse_name) == _agent_key
         ].copy()
     if _case_cat_agent_col:
         case_cat_period = case_cat_period[
@@ -334,10 +354,10 @@ if not is_dept_view:
 
 # ---------------- METRICS ----------------
 
-total_received = email_rec_period["OpenedDT"].notna().sum()
+total_received = email_received_period["OpenedDT"].notna().sum()
 total_handled = items_period["CloseDT"].notna().sum()
 
-completed_emails = email_rec_period[email_rec_period["CompletedDT"].notna()].copy()
+completed_emails = email_responded_period.copy()
 if len(completed_emails) > 0:
     completed_emails["ResponseTimeBusinessSec"] = completed_emails.apply(
         lambda r: business_seconds_between(r["OpenedDT"], r["CompletedDT"]), axis=1
@@ -367,11 +387,11 @@ sla_period_compliance_score = _period_sla["compliance_score"]
 sla_period_response_time_score = _period_sla["response_time_score"]
 avg_art = sla_avg_response_hours * 3600 if pd.notna(sla_avg_response_hours) else 0
 
-# Calculate one SLA score per day, then volume-weight the daily scores across
-# the selected period, as in the reference department dashboard.
+# Calculate one SLA score per response/completion day, then volume-weight the
+# daily scores across the selected period.
 _daily_sla_rows = []
 if sla_eligible > 0:
-    for _sla_date, _sla_group in valid_completed_emails.groupby("Date_Opened", dropna=True):
+    for _sla_date, _sla_group in valid_completed_emails.groupby("Date_Completed", dropna=True):
         _components = calculate_email_sla_score(_sla_group["ResponseTimeBusinessHours"])
         _daily_sla_rows.append({
             "Date": pd.to_datetime(_sla_date, errors="coerce"),
@@ -497,8 +517,8 @@ items_for_util = items_period[_util_mask].copy()
 total_handle_sec = items_for_util["HandleSec"].sum()
 util = (total_handle_sec / util_presence_sec) if util_presence_sec > 0 else 0
 
-email_invalid_open = email_rec_period["OpenedDT"].isna().sum()
-email_invalid_complete = email_rec_period["CompletedDT"].isna().sum()
+email_invalid_open = email_received_period["OpenedDT"].isna().sum()
+email_missing_or_invalid_complete = email_received_period["CompletedDT"].isna().sum()
 items_invalid_close = items_period["CloseDT"].isna().sum()
 
 aging_labels = ["0-4h", "4-8h", "8-24h", "1-3d", "3d+"]
@@ -534,10 +554,11 @@ st.markdown(
 sla_display = f"{email_sla_score:.1f}" if pd.notna(email_sla_score) else "—"
 sla_compliance_display = f"{sla_compliance:.1%}" if pd.notna(sla_compliance) else "—"
 sla_help = (
-    f"Daily-volume weighted 0–100 Email SLA Score: 60% from the share replied "
+    f"Response-date, daily-volume weighted 0–100 Email SLA Score: 60% from the share replied "
     f"within {SLA_TARGET_HOURS} business hours and 40% from normalized average "
     f"response time. The response component scores 100 at or below {SLA_TARGET_HOURS}h "
-    f"and declines proportionally above target."
+    f"and declines proportionally above target. Only emails responded to in the selected "
+    f"date range are included."
 )
 
 if is_dept_view:
@@ -590,7 +611,7 @@ if not is_dept_view and not _matching_pres_names:
         + _names_str
     )
 # Daily counts
-daily_received = email_rec_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
+daily_received = email_received_period.groupby("Date_Opened").size().reset_index(name="Emails_Received")
 daily_received = daily_received.rename(columns={"Date_Opened": "Date"})
 
 daily_handled = items_period.groupby("Date_Closed").size().reset_index(name="Items_Handled")
@@ -772,7 +793,10 @@ if sla_eligible > 0:
     sla_m2.metric(
         f"Replied ≤{SLA_TARGET_HOURS}h",
         sla_compliance_display,
-        help=f"{sla_met:,} of {sla_eligible:,} eligible completed emails met the target."
+        help=(
+            f"{sla_met:,} of {sla_eligible:,} eligible emails responded to during "
+            f"the selected period met the target."
+        )
     )
     sla_m3.metric(
         "Avg Response Time (BH)",
@@ -903,7 +927,7 @@ if sla_eligible > 0:
         f"({SLA_COMPLIANCE_WEIGHT:.0%} × the percentage replied within {SLA_TARGET_HOURS} business hours). "
         f"Average response performance contributes up to 40 points "
         f"({SLA_RESPONSE_TIME_WEIGHT:.0%} × min(100, {SLA_TARGET_HOURS} ÷ average response hours × 100)). "
-        f"Daily scores are weighted by eligible completed-email volume. Business hours are "
+        f"Daily response-date scores are weighted by eligible responded-email volume. Business hours are "
         f"{BUSINESS_START_HOUR:02d}:00–{BUSINESS_END_HOUR:02d}:00, weekends included."
         + _sla_note
     )
@@ -1198,5 +1222,8 @@ with st.expander("Data Quality", expanded=False):
     )
     dq1, dq2, dq3 = st.columns(3)
     dq1.metric("Invalid Opened Timestamps", f"{email_invalid_open:,}")
-    dq2.metric("Invalid Completion Timestamps", f"{email_invalid_complete:,}")
+    dq2.metric(
+        "Received Without Valid Completion",
+        f"{email_missing_or_invalid_complete:,}",
+    )
     dq3.metric("Invalid Item Close Timestamps", f"{items_invalid_close:,}")
